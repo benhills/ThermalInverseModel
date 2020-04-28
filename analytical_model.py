@@ -18,7 +18,8 @@ def analytical_model(Ts,qgeo,H,adot,nz=101,
              rateFactor=rateFactor,
              T_ratefactor=-10.,
              dHdx=0.,tau_dx=0.,
-             gamma=1.397,gamma_plus=True):
+             gamma=1.397,gamma_plus=True,
+             verbose=False):
     """
     1-D Analytical temperature profile from Rezvanbehbahani et al. (2019)
     Main improvement from the Robin (1955) solution is the nonlinear velocity profile
@@ -59,7 +60,7 @@ def analytical_model(Ts,qgeo,H,adot,nz=101,
     if gamma_plus:
         # Solve for gamma using the logarithmic regression with the Pe number
         Pe = adot*H/K
-        if Pe < 5.:
+        if Pe < 5. and verbose:
             print('Pe:',Pe)
             print('The gamma_plus fit is not well-adjusted for low Pe numbers.')
         # Rezvanbehbahani (2019) eq. (19)
