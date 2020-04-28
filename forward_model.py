@@ -12,9 +12,9 @@ April 28, 2020
 import numpy as np
 from scipy.optimize import least_squares
 from scipy import sparse
-from IceTemp_AnalyticModels import Robin_T
+from analytical_model import analytical_model
 
-def Weertman_T(Ts,qgeo,H,adot,const,dTs=[0.,0.],dH=[0.,0.],da=[0.,0.],v_surf=[0.,0.],
+def numerical_model(Ts,qgeo,H,adot,const,dTs=[0.,0.],dH=[0.,0.],da=[0.,0.],v_surf=[0.,0.],
                eps_xy=0.,nz=101,steady=True,ts=[],conv_crit=1e-4,tol=1e-4,melt=True):
     """
     1-D finite difference model for ice temperature based on
@@ -51,7 +51,7 @@ def Weertman_T(Ts,qgeo,H,adot,const,dTs=[0.,0.],dH=[0.,0.],da=[0.,0.],v_surf=[0.
     ----------
     z:          1-D array,  Discretized height above bed through the ice column
     T_weertman: 1-D array,  Numerical solution for ice temperature
-    T_robin:    1-D array,  Analytic solution for ice temperature
+    T_analytical:    1-D array,  Analytic solution for ice temperature
     T_diff:     1-D array,  Convergence profile (i.e. difference between final and t-1 temperatures)
     M:          1-D array,  Melt rates through time (m/yr)
 
@@ -72,15 +72,14 @@ def Weertman_T(Ts,qgeo,H,adot,const,dTs=[0.,0.],dH=[0.,0.],da=[0.,0.],v_surf=[0.
     # Weertman has this extra term
     #v_z_surf += v_surf[0]*dH[0]+v_surf[1]*dH[1]
     if hasattr(v_z_surf,"__len__"):
-        robin_adv = v_z_surf[0]*const.spy
-        Ts_robin = Ts[0]
+        adv_analytical = v_z_surf[0]*const.spy
+        Ts_analytical = Ts[0]
     else:
-        robin_adv = v_z_surf*const.spy
-        Ts_robin = Ts
+        adv_analytical = v_z_surf*const.spy
+        Ts_analytical = Ts
 
     # Call the analytic solution from another script
-    # (this was successfully checked with the way that Weertman writes it in (1968) eq. 2)
-    z_robin,T_robin = Robin_T(Ts_robin,qgeo,H,robin_adv,const,nz=nz)
+    z_analytical,T_analytical = analytical_model(Ts_analytical,qgeo,H,adv_analytical,const,nz=nz)
 
     ###########################################################################
 
@@ -96,7 +95,7 @@ def Weertman_T(Ts,qgeo,H,adot,const,dTs=[0.,0.],dH=[0.,0.],da=[0.,0.],v_surf=[0.
         # TODO: (there is likely a better way to do this)
         C_opt = C*1e-13
         # Shear Strain Rate, Weertman (1968) eq. 7
-        eps_xz = C_opt*np.exp(-const.Qminus/(const.R*(T_robin+const.T0)))*tau_xz**const.n
+        eps_xz = C_opt*np.exp(-const.Qminus/(const.R*(T_analytical+const.T0)))*tau_xz**const.n
         vx_opt = np.trapz(eps_xz,z)
         return abs(vx_opt-v_surf[0])*const.spy
     # Get the final coefficient value
@@ -104,8 +103,8 @@ def Weertman_T(Ts,qgeo,H,adot,const,dTs=[0.,0.],dH=[0.,0.],da=[0.,0.],v_surf=[0.
     C_fin = res['x']*1e-13
 
     # Final Strain Rates, Weertman (1968) eq. 7
-    eps_xz = C_fin*np.exp(-const.Qminus/(const.R*(T_robin+const.T0)))*tau_xz**const.n
-    eps_yz = C_fin*np.exp(-const.Qminus/(const.R*(T_robin+const.T0)))*tau_yz**const.n
+    eps_xz = C_fin*np.exp(-const.Qminus/(const.R*(T_analytical+const.T0)))*tau_xz**const.n
+    eps_yz = C_fin*np.exp(-const.Qminus/(const.R*(T_analytical+const.T0)))*tau_yz**const.n
     # Horizontal Velocity (integrate the strain rate through the column)
     v_x = np.empty_like(z)
     v_y = np.empty_like(z)
@@ -125,8 +124,8 @@ def Weertman_T(Ts,qgeo,H,adot,const,dTs=[0.,0.],dH=[0.,0.],da=[0.,0.],v_surf=[0.
     Q = (eps_e*tau_e)/(const.rho*const.Cp)
 
     # Horizontal Temperature Gradients, Weertman (1968) eq. 6b
-    dTdx = dTs[0] + (T_robin-np.mean(Ts))/2.*(1./H*dH[0]-(1/np.mean(adot))*da[0])
-    dTdy = dTs[1] + (T_robin-np.mean(Ts))/2.*(1./H*dH[1]-(1/np.mean(adot))*da[1])
+    dTdx = dTs[0] + (T_analytical-np.mean(Ts))/2.*(1./H*dH[0]-(1/np.mean(adot))*da[0])
+    dTdy = dTs[1] + (T_analytical-np.mean(Ts))/2.*(1./H*dH[1]-(1/np.mean(adot))*da[1])
     # Advection Rates (K s-1)
     Adv_x = -v_x*dTdx
     Adv_y = -v_y*dTdy
@@ -139,7 +138,7 @@ def Weertman_T(Ts,qgeo,H,adot,const,dTs=[0.,0.],dH=[0.,0.],da=[0.,0.],v_surf=[0.
     ### Finite Difference Scheme ###
 
     # Initial Condition from Robin Solution
-    T = T_robin.copy()
+    T = T_analytical.copy()
     dz = np.mean(np.gradient(z))
     Tgrad = -qgeo/const.k
     if hasattr(v_z_surf,"__len__"):
@@ -249,11 +248,11 @@ def Weertman_T(Ts,qgeo,H,adot,const,dTs=[0.,0.],dH=[0.,0.],da=[0.,0.],v_surf=[0.
                 # update the cumulative melt by the melt rate
                 Mcum = np.append(Mcum,Mcum[-1]+Mrate[-1]*100*dt/const.spy)
                 print('dt=',dt/const.spy,'melt=',np.round(Mrate[-1]*1000.,2),np.round(Mcum[-1],2))
-        T_diff = T-T_robin
+        T_diff = T-T_analytical
 
     try:
         M
     except:
         M = False
 
-    return z,T_weertman,T_robin,T_diff,Mrate,Mcum
+    return z,T_weertman,T_analytical,T_diff,Mrate,Mcum
