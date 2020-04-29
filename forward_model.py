@@ -12,7 +12,7 @@ April 28, 2020
 import numpy as np
 from scipy.optimize import least_squares
 from scipy import sparse
-from analytical_model import analytical_model
+from analytical_model import analytical_model, surfVelOpt
 from constants import constants
 const = constants()
 
@@ -33,14 +33,7 @@ class numerical_model():
 
     def __init__(self,const=const):
         """
-
-        Output
-        ----------
-        z:          1-D array,  Discretized height above bed through the ice column
-        T_weertman: 1-D array,  Numerical solution for ice temperature
-        T_analytical:    1-D array,  Analytic solution for ice temperature
-        T_diff:     1-D array,  Convergence profile (i.e. difference between final and t-1 temperatures)
-        M:          1-D array,  Melt rates through time (m/yr)
+        Initialize the
         """
 
         ### Boundary Constraints ###
@@ -68,8 +61,6 @@ class numerical_model():
         self.dz = np.mean(np.gradient(self.z))
         # pressure melting
         self.PMP = const.rho*const.g*(self.H-self.z)*const.beta
-
-        ###########################################################################
 
         ### Start with the analytic 'Robin Solution' as an initial condition ###
 
@@ -105,25 +96,31 @@ class numerical_model():
 
     # ---------------------------------------------
 
-    def viscosity(self,tau_xz,const=const):
+    def viscosity(self,tau_xz,vel_opt=False,const=const):
         """
-        TODO: some different options to get A
+        Rate Facor function for ice viscosity, A(T)
+        Cuffey and Paterson (2010), equation 3.35
+
+        Output
+        --------
+        A:      float,  Rate Factor, viscosity = A^(-1/n)/2
         """
 
-        # Function to Optimize
-        def surfVelOpt(C):
-            # Change the coefficient so that the least_squares function takes appropriate steps
-            # TODO: (there is likely a better way to do this)
-            C_opt = C*1e-13
-            # Shear Strain Rate, Weertman (1968) eq. 7
-            eps_xz = C_opt*np.exp(-const.Qminus/(const.R*(self.T_analytical+const.T0)))*tau_xz**const.n
-            vx_opt = np.trapz(eps_xz,self.z)
-            return abs(vx_opt-self.v_surf)*const.spy
-        # Get the final coefficient value
-        res = least_squares(surfVelOpt, 1)
-        C_fin = res['x']*1e-13
+        if not vel_opt:
+            # create an array for activation energies
+            Q = const.Qminus*np.ones_like(self.T)
+            Q[self.T>-10.] = const.Qplus
+            # Convert to K
+            T = self.T + const.T0
+            # equation 3.35
+            P = const.rho*const.g*self.z
+            A = const.Astar*np.exp(-(Q/const.R)*((1./(T+const.beta*P))-(1/const.Tstar)))
+        else:
+            # Get the final coefficient value
+            res = least_squares(surfVelOpt, 1, args=(tau_xz,self.T,self.z,self.v_surf))
+            C_fin = res['x']*1e-13
 
-        A = C_fin*np.exp(-const.Qminus/(const.R*(self.T_analytical+const.T0)))
+            A = C_fin*np.exp(-const.Qminus/(const.R*(self.T_analytical+const.T0)))
 
         return A
 
@@ -131,7 +128,6 @@ class numerical_model():
 
     def source_terms(self,const=const):
         """
-        Description
         """
 
         ### Optimize the rate factor to fit the surface velocity ###
@@ -163,7 +159,7 @@ class numerical_model():
 
     def stencil(self,const=const):
         """
-        ### Finite Difference Scheme ###
+        Finite Difference Scheme
         """
 
         # Choose time step
@@ -206,11 +202,11 @@ class numerical_model():
         self.Sdot[0] = -2*self.dz*self.Tgrad*diff/self.dt
         self.Sdot[-1] = 0.
 
+    # ---------------------------------------------
 
     def melt_output(self,i,const=const):
         """
         """
-
         # If melting
         if np.any(self.T>self.PMP):
             Tplus = (self.T[self.T>self.PMP]-self.PMP[self.T>self.PMP])*self.int_stencil[self.T>self.PMP]*self.dz
@@ -231,10 +227,7 @@ class numerical_model():
             self.Mcum = np.append(self.Mcum,self.Mcum[-1]+self.Mrate[-1]*100*self.dt/const.spy)
             print('dt=',self.dt/const.spy,'melt=',np.round(self.Mrate[-1]*1000.,2),np.round(self.Mcum[-1],2))
 
-
     # ---------------------------------------------
-
-    ### Iterations and Output ###
 
     def run(self,const=const):
         """

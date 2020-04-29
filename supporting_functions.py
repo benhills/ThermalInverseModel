@@ -13,6 +13,16 @@ from scipy.special import gamma as γ
 from scipy.special import gammaincc as γincc
 from constants import constants, rateFactor
 
+# Function to Optimize
+def surfVelOpt(C,tau_xz,T,z,v_surf,const=constants()):
+    # Change the coefficient so that the least_squares function takes appropriate steps
+    C_opt = C*1e-13
+    # Shear Strain Rate, Weertman (1968) eq. 7
+    eps_xz = C_opt*np.exp(-const.Qminus/(const.R*(T+const.T0)))*tau_xz**const.n
+    vx_opt = np.trapz(eps_xz,z)
+    return abs(vx_opt-v_surf)*const.spy
+
+
 def analytical_model(Ts,qgeo,H,adot,nz=101,
              const=constants(),
              rateFactor=rateFactor,
