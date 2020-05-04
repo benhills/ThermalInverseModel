@@ -11,17 +11,72 @@ April 28, 2020
 import numpy as np
 from scipy.special import gamma as γ
 from scipy.special import gammaincc as γincc
+from scipy.optimize import minimize
 from constants import constants, rateFactor
 
-# Function to Optimize
-def surfVelOpt(C,tau_xz,T,z,v_surf,const=constants()):
-    # Change the coefficient so that the least_squares function takes appropriate steps
+# ---------------------------------------------------
+
+def viscosity(T,z,const=constants(),
+        tau_xz=None,v_surf=None):
+    """
+    Rate Facor function for ice viscosity, A(T)
+    Cuffey and Paterson (2010), equation 3.35
+
+    Optional case for optimization to the surface velocity using function
+    surfVelOpt()
+
+    Parameters
+    ----------
+    T:      array
+        Ice Temperature (C)
+    z:      array
+        Depth (m)
+    const:  class
+        Constants
+    tau_xz: array, optional
+        Shear stress profile, only needed if optimizing the strain rate to match surface
+    v_surf: float, optional
+        Surface velocity to be matched in optimization
+
+    Output
+    ----------
+    A:      array,  Rate Factor, viscosity = A^(-1/n)/2
+    """
+
+    # create an array for activation energies
+    Q = const.Qminus*np.ones_like(T)
+    Q[T>-10.] = const.Qplus
+    # Overburden pressure
+    P = const.rho*const.g*z
+
+    if v_surf is None:
+        # rate factor Cuffey and Paterson (2010) equation 3.35
+        A = const.Astar*np.exp(-(Q/const.R)*((1./(T+const.T0+const.beta*P))-(1/const.Tstar)))
+    else:
+        # Get the final coefficient value
+        res = minimize(surfVelOpt, 1, args=(Q,P,tau_xz,T,z,v_surf))
+        # C was scaled for appropriate stepping of the minimization function, scale back
+        C_fin = res['x']*1e-13
+        # rate factor Cuffey and Paterson (2010) equation 3.35
+        A = C_fin*np.exp(-(Q/const.R)*((1./(T+const.T0+const.beta*P))-(1/const.Tstar)))
+    return A
+
+def surfVelOpt(C,Q,P,tau_xz,T,z,v_surf,const=constants()):
+    """
+    Optimize the viscosity profile using the known surface velocity
+    TODO: has not been fully tested
+    """
+    # Change the coefficient so that the minimization function takes appropriate steps
     C_opt = C*1e-13
+    # rate factor Cuffey and Paterson (2010) equation 3.35
+    A = C_opt*np.exp(-(Q/const.R)*((1./(T+const.T0+const.beta*P))-(1/const.Tstar)))
     # Shear Strain Rate, Weertman (1968) eq. 7
-    eps_xz = C_opt*np.exp(-const.Qminus/(const.R*(T+const.T0)))*tau_xz**const.n
+    eps_xz = A*tau_xz**const.n
+    # Integrate the strain rate to get the surface velocity
     vx_opt = np.trapz(eps_xz,z)
     return abs(vx_opt-v_surf)*const.spy
 
+# ---------------------------------------------------
 
 def analytical_model(Ts,qgeo,H,adot,nz=101,
              const=constants(),
