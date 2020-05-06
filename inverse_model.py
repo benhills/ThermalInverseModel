@@ -10,11 +10,20 @@ April 28, 2020
 
 import numpy as np
 import time
-from forward_model.py import forwardModel
+from forward_model import numerical_model
+from scipy.interpolate import interp1d
 
-input_data = np.load('input_data.npy')
+z_data,T_data = np.load('data/input_data.npy')
 
-def cost(modeled_Temp, T_param, t_param, measured_Temp=input_data, regularization=0.0):
+
+def norm2(m,z_data=z_data,T_data=T_data):
+    T_interp = interp1d(m.z,m.T)
+    T_mod = T_interp(z_data)
+    norm = np.sum((T_data-T_mod)**2.)
+    return norm
+
+
+def cost(modeled_Temp, T_param, t_param, measured_Temp=T_data, regularization=0.0):
     # Return the cost function given the measured temperature profile and our model output
     if regularization > 0:
         reg = np.nansum(np.gradient(np.gradient(T_param,t_param),t_param) ** 2.0)
@@ -37,7 +46,7 @@ def monte_carlo_run(params,Tdata,zdata,
     # fencepost; this is so we don't have errors comparing to previous state
     t_var = np.arange(tinit,0.+dt_var,dt_var)
     t_var *= np.linspace(1,0,len(t_var))**3.
-    Tmodel = forwardModel(params,t_var,tinit)
+    Tmodel = numerical_model(params,t_var,tinit)
 
     # Preallocate locations for output--we want all our accepted models saved
     outputs = np.zeros((len(t_var), n_iterates))
@@ -62,7 +71,7 @@ def monte_carlo_run(params,Tdata,zdata,
             continue
 
         #evaluate model
-        Tmodel = forwardModel(params_pert,t_var,tinit)
+        Tmodel = numerical_model(params_pert,t_var,tinit)
 
         # see if model is any good---store cost function in vector, will be overwritten if not chosen
         misfits[i + 1, :] = cost(Tmodel, params_pert, t_var, regularization=regularization)

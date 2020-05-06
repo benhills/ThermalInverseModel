@@ -41,13 +41,14 @@ class numerical_model():
         ### Boundary Constraints ###
         self.Ts = -50.      # Surface Temperature   [C]
         self.qgeo = .050    # Geothermal flux       [W/m2]
-        self.H = 2800.      # Ice thickness         [m]
-        self.adot = .1      # Accumulation rate     [m/s]
+        self.H = 2857.      # Ice thickness         [m]
+        self.adot = .1/const.spy      # Accumulation rate     [m/s]
         self.v_surf = 0.    # Surface velocity     [m/yr]
+        self.gamma = 1.532
 
         ### Gradients ###
         self.dTs = 0.                   # Change in air temperature over distance x/y [C/m]
-        self.dH = np.sin(.1*np.pi/180.)    # Thickness gradient in x/y directions, used for deformational flow calculation        [m/m]
+        self.dH = np.sin(.2*np.pi/180.)    # Thickness gradient in x/y directions, used for deformational flow calculation        [m/m]
         self.da = 0.                    # Accumulation gradient in x/y directions     [m/yr/m]
 
         ### Empty Time Array as Default ###
@@ -68,20 +69,19 @@ class numerical_model():
         #v_z_surf = self.adot + v_surf*dH
         if hasattr(self.adot,"__len__"):
             self.z,self.T = analytical_model(self.Ts[0],self.qgeo,self.H,
-                    self.adot[0],const=const,nz=self.nz)
+                    self.adot[0],const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
             # TODO: linear velocity profile should change eventually
-            self.v_z = self.adot[0]*self.z/self.H
+            self.v_z = self.adot[0]*(self.z/self.H)**self.gamma
         else:
             self.z,self.T = analytical_model(self.Ts,self.qgeo,self.H,
-                    self.adot,const=const,nz=self.nz)
+                    self.adot,const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
             # TODO: linear velocity profile should change eventually
-            self.v_z = self.adot[0]*self.z/self.H
+            self.v_z = self.adot*(self.z/self.H)**self.gamma
 
         ### Discretize the vertical coordinate ###
         self.dz = np.mean(np.gradient(self.z))      # Vertical step
         self.P = const.rho*const.g*(self.H-self.z)  # Pressure
         self.pmp = self.P*const.beta                # Pressure melting
-        self.Tgrad = -self.qgeo/const.k             # Temperature gradient at bed
 
 
     def source_terms(self,const=const):
@@ -118,7 +118,7 @@ class numerical_model():
 
         # Choose time step
         if 'steady' in self.flags:
-            # TODO: what is this?
+            # TODO: why was this chosen, what is this equation?
             self.dt = 0.5*self.dz**2./(const.k/(const.rho*const.Cp))
         else:
             # Check if the time series is monotonically increasing
@@ -129,7 +129,9 @@ class numerical_model():
             self.dt = np.mean(np.gradient(self.ts))
         # Stability, check the CFL
         if max(self.v_z)*self.dt/self.dz > 1.:
-            print(max(self.v_z)*self.dt/self.dz,self.dt,self.dz)
+            print('CFL = ',max(self.v_z)*self.dt/self.dz,'; cannot be > 1.')
+            print('dt = ',self.dt/const.spy,' years')
+            print('dz = ',self.dz,' meters')
             raise ValueError("Numerically unstable, choose a smaller time step or a larger spatial step.")
 
         # Stencils
@@ -154,6 +156,7 @@ class numerical_model():
         self.B[-1,:] = 0.
 
         # Source Term
+        self.Tgrad = -self.qgeo/const.k             # Temperature gradient at bed
         self.Sdot[0] = -2*self.dz*self.Tgrad*diff/self.dt
         self.Sdot[-1] = 0.
 
@@ -193,14 +196,25 @@ class numerical_model():
         """
         Run the finite-difference model as it has been set up through the other functions.
         """
+
+        # Run the initial conditions until stable
+        T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
+        while any(abs(self.T-T_new)>self.tol):
+            self.T = T_new.copy()
+            T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
+            T_new[T_new>self.pmp] = self.pmp[T_new>self.pmp]
+        self.T = T_new.copy()
+
         if 'melt' in self.flags:
             self.Mrate = np.empty((0))
             self.Mcum = np.array([0])
 
         # iterate through all times
+        self.Ts_out = np.empty((0,len(self.T)))
         for i in range(len(self.ts)):
             if i%1000 == 0:
                 print(int(self.ts[i]/const.spy),end=',')
+                self.Ts_out = np.append(self.Ts_out,[self.T],axis=0)
             # Update to current time
             self.T[-1] = self.Ts[i]  # set surface boundary condition
             adot_scale = self.adot[i]/self.adot[0]  # advection updates every time step
