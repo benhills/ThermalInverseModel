@@ -11,6 +11,8 @@ April 28, 2020
 import numpy as np
 from scipy.special import gamma as γ
 from scipy.special import gammaincc as γincc
+from scipy.special import erf
+from scipy.integrate import quad
 from scipy.optimize import minimize
 from constants import constants, rateFactor
 
@@ -150,3 +152,64 @@ def analytical_model(Ts,qgeo,H,adot,nz=101,
     term2 = Γ_1-Γ_2
     T = Ts + qgeo*(-phi)**(-1./(gamma+1.))/(const.k*(gamma+1))*term2
     return z,T
+
+
+def Robin_T(Ts,qgeo,H,adot,nz=101,
+        const=constants(),melt=True,verbose=False):
+    """
+    Analytic ice temperature model from Robin (1955)
+
+    Assumptions:
+        1) no horizontal advection
+        2) vertical advection is linear with depth
+        3) firn column is treated as equivalent thickness of ice
+        4) If base is warmer than the melting temperature recalculate with new basal gradient
+        5) no strain heating
+
+    Parameters
+    ----------
+    Ts:     float,  Surface Temperature (C)
+    qgeo:   float,  Geothermal flux (W/m2)
+    H:      float,  Ice thickness (m)
+    adot:   float,  Accumulation rate (m/yr)
+    nz:     int,    Number of layers in the ice column
+    const:  class,  Constants
+    melt:   bool,   Choice to allow melting, when true the bed temperature
+                    is locked at the pressure melting point and melt rates
+                    are calculated
+
+    Output
+    ----------
+    z:      1-D array,  Discretized height above bed through the ice column
+    T:      1-D array,  Analytic solution for ice temperature
+    """
+
+    if verbose:
+        print('Solving Robin Solution for analytic temperature profile')
+        print('Surface Temperature:',Ts)
+        print('Geothermal Flux:',qgeo)
+        print('Ice Thickness:',H)
+        print('Accumulation Rate',adot)
+
+    z = np.linspace(0,H,nz)
+    q2 = adot/(2*(const.k/(const.rho*const.Cp))*H)
+    Tb_grad = -qgeo/const.k
+    f = lambda z : np.exp(-(z**2.)*q2)
+    TTb = Tb_grad*np.array([quad(f,0,zi)[0] for zi in z])
+    dTs = Ts - TTb[-1]
+    T = TTb + dTs
+    # recalculate if basal temperature is above melting (see van der Veen pg 148)
+    Tm = const.beta*const.rho*const.g*H
+    if melt and T[0] > Tm:
+        Tb_grad = -2.*np.sqrt(q2)*(Tm-Ts)/np.sqrt(np.pi)*(np.sqrt(erf(adot*H*const.rho*const.Cp/(2.*const.k)))**(-1))
+        TTb = Tb_grad*np.array([quad(f,0,zi)[0] for zi in z])
+        dTs = Ts - TTb[-1]
+        T = TTb + dTs
+        M = (Tb_grad + qgeo/const.k)*const.k/const.L
+        if verbose:
+            print('Melting at the bed: ', np.round(M*const.spy/const.rho*1000.,2), 'mm/year')
+    if verbose:
+        print('Finished Robin Solution for analytic temperature profile.\n')
+    return z,T
+
+

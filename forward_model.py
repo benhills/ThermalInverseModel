@@ -12,7 +12,7 @@ April 28, 2020
 import numpy as np
 from scipy import sparse
 from scipy.integrate import cumtrapz
-from supporting_functions import analytical_model, viscosity
+from supporting_functions import analytical_model, viscosity, Robin_T
 from constants import constants
 const = constants()
 
@@ -45,6 +45,7 @@ class numerical_model():
         self.adot = .1/const.spy      # Accumulation rate     [m/s]
         self.v_surf = 0.    # Surface velocity     [m/yr]
         self.gamma = 1.532
+        self.p = 1000.      # Lliboutry shape factor for vertical velocity (large p is ~linear)
 
         ### Gradients ###
         self.dTs = 0.                   # Change in air temperature over distance x/y [C/m]
@@ -59,7 +60,7 @@ class numerical_model():
 
     # ---------------------------------------------
 
-    def initial_conditions(self,const=const):
+    def initial_conditions(self,const=const,analytical='Robin'):
         """
         Define the initial ice column properties using an analytical solution
         with paramaters from at the beginning of the time series.
@@ -68,15 +69,27 @@ class numerical_model():
         # TODO: Weertman has this extra term
         #v_z_surf = self.adot + v_surf*dH
         if hasattr(self.adot,"__len__"):
-            self.z,self.T = analytical_model(self.Ts[0],self.qgeo,self.H,
-                    self.adot[0],const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
-            # TODO: linear velocity profile should change eventually
-            self.v_z = self.adot[0]*(self.z/self.H)**self.gamma
+            # initial temperature from analytical solution
+            if analytical == 'Robin':
+                self.z,self.T = Robin_T(self.Ts[0],self.qgeo,self.H,
+                        self.adot[0],const=const,nz=self.nz)
+            elif analytical == 'Rezvan':
+                self.z,self.T = analytical_model(self.Ts[0],self.qgeo,self.H,
+                        self.adot[0],const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
+            # vertical velocity by shape factor
+            zeta = (1.-(self.z/self.H))
+            self.v_z = self.adot[0]*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
         else:
-            self.z,self.T = analytical_model(self.Ts,self.qgeo,self.H,
-                    self.adot,const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
-            # TODO: linear velocity profile should change eventually
-            self.v_z = self.adot*(self.z/self.H)**self.gamma
+            # initial temperature from analytical solution
+            if analytical == 'Robin':
+                self.z,self.T = Robin_T(self.Ts[0],self.qgeo,self.H,
+                        self.adot[0],const=const,nz=self.nz)
+            elif analytical == 'Rezvan':
+                self.z,self.T = analytical_model(self.Ts[0],self.qgeo,self.H,
+                        self.adot[0],const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
+            # vertical velocity by shape factor
+            zeta = (1.-(self.z/self.H))
+            self.v_z = self.adot*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
 
         ### Discretize the vertical coordinate ###
         self.dz = np.mean(np.gradient(self.z))      # Vertical step
@@ -192,7 +205,7 @@ class numerical_model():
 
     # ---------------------------------------------
 
-    def run(self,const=const):
+    def run(self,const=const,verbose=True):
         """
         Run the finite-difference model as it has been set up through the other functions.
         """
@@ -213,7 +226,8 @@ class numerical_model():
         self.Ts_out = np.empty((0,len(self.T)))
         for i in range(len(self.ts)):
             if i%1000 == 0:
-                print(int(self.ts[i]/const.spy),end=',')
+                if verbose:
+                    print(int(self.ts[i]/const.spy),end=',')
                 self.Ts_out = np.append(self.Ts_out,[self.T],axis=0)
             # Update to current time
             self.T[-1] = self.Ts[i]  # set surface boundary condition
