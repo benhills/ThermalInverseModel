@@ -78,18 +78,20 @@ class numerical_model():
                         self.adot[0],const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
             # vertical velocity by shape factor
             zeta = (1.-(self.z/self.H))
-            self.v_z = self.adot[0]*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
+            self.v_z = self.adot[0]*(self.z/self.H)**self.gamma
+            #self.v_z = self.adot[0]*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
         else:
             # initial temperature from analytical solution
             if analytical == 'Robin':
-                self.z,self.T = Robin_T(self.Ts[0],self.qgeo,self.H,
-                        self.adot[0],const=const,nz=self.nz)
+                self.z,self.T = Robin_T(self.Ts,self.qgeo,self.H,
+                        self.adot,const=const,nz=self.nz)
             elif analytical == 'Rezvan':
-                self.z,self.T = analytical_model(self.Ts[0],self.qgeo,self.H,
-                        self.adot[0],const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
+                self.z,self.T = analytical_model(self.Ts,self.qgeo,self.H,
+                        self.adot,const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
             # vertical velocity by shape factor
             zeta = (1.-(self.z/self.H))
-            self.v_z = self.adot*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
+            self.v_z = self.adot*(self.z/self.H)**self.gamma
+            #self.v_z = self.adot*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
 
         ### Discretize the vertical coordinate ###
         self.dz = np.mean(np.gradient(self.z))      # Vertical step
@@ -210,20 +212,36 @@ class numerical_model():
         Run the finite-difference model as it has been set up through the other functions.
         """
 
-        # Run the initial conditions until stable
-        T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
-        while any(abs(self.T-T_new)>self.tol):
-            self.T = T_new.copy()
-            T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
-            T_new[T_new>self.pmp] = self.pmp[T_new>self.pmp]
-        self.T = T_new.copy()
-
+        self.Ts_out = np.empty((0,len(self.T)))
         if 'melt' in self.flags:
             self.Mrate = np.empty((0))
             self.Mcum = np.array([0])
 
+        # Run the initial conditions until stable
+        T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
+        steady_iter = 0
+        if verbose:
+            print('Initializing',end='')
+        while any(abs(self.T-T_new)>self.tol):
+            if verbose and steady_iter%1000==0:
+                print('.',end='')
+            self.T = T_new.copy()
+            T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
+            T_new[T_new>self.pmp] = self.pmp[T_new>self.pmp]
+            steady_iter += 1
+        self.T = T_new.copy()
+
+        if 'steady' in self.flags:
+            if verbose:
+                print('Exiting model at steady state condition.')
+            # Run one more time to see how much things are changing still
+            T_steady = self.A*self.T - self.B*self.T + self.dt*self.Sdot
+            T_steady[T_steady>self.pmp] = self.pmp[T_steady>self.pmp]
+            self.Ts_out = np.append(self.Ts_out,[self.T],axis=0)
+            self.Ts_out = np.append(self.Ts_out,[T_steady],axis=0)
+            return
+
         # iterate through all times
-        self.Ts_out = np.empty((0,len(self.T)))
         for i in range(len(self.ts)):
             if i%1000 == 0:
                 if verbose:
