@@ -9,15 +9,63 @@ April 28, 2020
 """
 
 import numpy as np
-import time
 from forward_model import numerical_model
 from scipy.interpolate import interp1d
+from constants import constants
+const = constants()
 
 mult = np.matmul
 inv = np.linalg.inv
 tr = np.transpose
 
-z_data,T_data = np.load('data/input_data.npy')
+z_data,T_data,C_data = np.transpose(np.load('./data/icetemp_data.npy'))
+Spice_Accumulation = np.load('./data/SP_accumulation_interpolated.npy')
+Spice_airTemp = np.load('./data/SP_airTemperature_interpolated.npy')
+
+ts = Spice_Accumulation[0]
+adot = Spice_Accumulation[1]
+Tsurf = Spice_airTemp[1]
+H = 2850.
+t_m = np.arange(min(ts),max(ts)+10000,10000)
+
+# Initial Guess
+qgeo = .06
+gamma = 1.
+dH = np.sin(.05*np.pi/180.)
+sr = .5
+# Create model array and model step array
+m_init = np.array([qgeo,gamma])
+mstep = np.array([.001,.01])
+m_init = np.append(m_init,dH*np.ones(7))
+mstep = np.append(mstep,dH/10.*np.ones(7))
+m_init = np.append(m_init,sr*np.ones(7))
+mstep = np.append(mstep,.01*np.ones(7))
+
+def f(m,H=H,ts=ts,adot=adot,Tsurf=Tsurf,zdata=z_data,tol=1e-4):
+    print('Running Model')
+    print('m:',m)
+    fp = numerical_model()
+    fp.ts = ts[:]*const.spy
+    fp.adot = adot/const.spy
+    fp.Ts = Tsurf
+    fp.qgeo = m[0]
+    fp.gamma = m[1]
+
+    dH_interp = interp1d(t_m,m[2:9])
+    fp.dHs = dH_interp(ts)
+    fp.dH = fp.dHs[0]
+    sr_interp = interp1d(t_m,m[9:])
+    fp.srs = sr_interp(ts)
+    fp.sliding_ratio = fp.srs[0]
+    fp.initial_conditions(analytical='Rezvan')
+    fp.source_terms()
+    fp.stencil()
+    fp.tol = tol
+    fp.run(verbose=True)
+
+    Tinterp = interp1d(fp.z,fp.Ts_out[-1])
+    return Tinterp(H+zdata)
+
 
 def norm2(m,z_data=z_data,T_data=T_data):
     T_interp = interp1d(m.z,m.T)
@@ -91,59 +139,47 @@ def weakly_nonlinear(f,norm,zdata,Tdata,C,m_init,mstep,Niter=10,
         if i>1 and norm(dm)<solution_tolerance:
             return m_out[:i+1,:],d_out[:i+1,:]
 
-def monte_carlo(params,Tdata,zdata,
-                    tinit=-50000.,dt_var=5000.,
-                    n_iterates=500,stepsize=0.2,regularization=0.):
+def monte_carlo(f,m,msteps,Tdata=T_data,zdata=z_data,norm=norm2,
+                    n_iterates=500,regularization=0.):
     """
     Perform a suite of runs to get our distribution. We start with an initial guess, and move around.
     """
 
-    # this is just to check how long it took
-    now = time.time()
+    # Initialize
     i = 0
 
-    # fencepost; this is so we don't have errors comparing to previous state
-    t_var = np.arange(tinit,0.+dt_var,dt_var)
-    t_var *= np.linspace(1,0,len(t_var))**3.
-    Tmodel = numerical_model(params,t_var,tinit)
-
     # Preallocate locations for output--we want all our accepted models saved
-    outputs = np.zeros((len(t_var), n_iterates))
-    outputs[:, i] = params
+    m_out = np.zeros((len(m),n_iterates-1))
+    m_out[:, i] = m
+
+    Tmodel = f(m)
+
     # misfits will have both a regularized and an unregularized row
-    misfits = np.zeros((n_iterates, 2))
-    misfits[i] = cost(Tmodel, params, t_var,regularization=regularization)
+    misfits = np.zeros((n_iterates))
+    misfits[i] = np.sum((Tdata-Tmodel)**2.)
 
-    # This is the real bulk of the work--keep trying to make steps downward
-    while i < n_iterates - 1:
-        # start by perturbing--first copy our vector to avoid modifying original in case we dont step
-        params_pert = params.copy()
-        # randint gives us a random component of the vector to perturb
-        rand_ind = np.random.randint(0, len(t_var) - 1)
-        # We use a normal distribution with variance "stepsize" for the perturbation
-        #stepsize = max(10*(1.-float(i)/n_iterates),1)
-        params_pert[rand_ind] = params[rand_ind] + np.random.normal(0., stepsize)
+    while i < n_iterates-1:
+        # Start iterating
+        m_pert = m.copy()
+        rand_ind = np.random.randint(0,len(m))
+        m_pert[rand_ind] = m[rand_ind] + np.random.normal(0.,msteps[rand_ind])
 
-        # enforce that the temperature is within a reasonable range
-        if params_pert[rand_ind] > 0. or params_pert[rand_ind] < -50.:
-            # if not, we don't save the perturbed state and we just restart this iteration of the while loop
-            continue
+        Tmodel = f(m_pert)
+        misfits[i+1] = np.sum((Tdata-Tmodel)**2.)
 
-        #evaluate model
-        Tmodel = numerical_model(params_pert,t_var,tinit)
-
-        # see if model is any good---store cost function in vector, will be overwritten if not chosen
-        misfits[i + 1, :] = cost(Tmodel, params_pert, t_var, regularization=regularization)
-
-        # Decide whether to accept our new guess
-        if i < 1 or np.random.rand() < min(1, np.exp(-(misfits[i + 1, 0] - misfits[i, 0]))):
-            # We have accepted the model! We need to store it, and save this state as the new model to step from
-            outputs[:, i + 1] = params_pert
-            params = params_pert.copy()
+        if i < 1 or np.random.rand() < min(1,np.exp(-(misfits[i+1]-misfits[i]))):
+            # accept the model
+            m_out[:,i] = m_pert
+            m = m_pert.copy()
             if i%100 == 0:
-                print('Successful Run:',i,np.random.normal(0., stepsize),stepsize,misfits[i + 1, :])
+                print('Successful Run:',i,np.random.normal(0., msteps),msteps,misfits[i + 1])
             # increment only upon acceptance of the guess
             i += 1
 
-    print('Run took {:5.1f}s'.format(time.time() - now))
-    return outputs, misfits
+        np.save('Models',m_out)
+        np.save('Misfits',misfits)
+
+    return m_out, misfits
+
+
+monte_carlo(f,m_init,mstep,n_iterates=1000)

@@ -43,9 +43,10 @@ class numerical_model():
         self.qgeo = .050    # Geothermal flux       [W/m2]
         self.H = 2857.      # Ice thickness         [m]
         self.adot = .1/const.spy      # Accumulation rate     [m/s]
-        self.v_surf = 0.    # Surface velocity     [m/yr]
         self.gamma = 1.532
         self.p = 1000.      # Lliboutry shape factor for vertical velocity (large p is ~linear)
+        self.v_surf = 0.    # Surface velocity     [m/yr]
+        self.slide_ratio = 0.
 
         ### Gradients ###
         self.dTs = 0.                   # Change in air temperature over distance x/y [C/m]
@@ -111,8 +112,13 @@ class numerical_model():
         A = viscosity(self.T,self.z,const=const,tau_xz=tau_xz,v_surf=None)
         # Strain rate, Weertman (1968) eq. 7
         eps_xz = A*tau_xz**const.n
+        u_def = np.trapz(eps_xz,self.z)
         # strain heat term (K s-1) TODO: check that it is ok to use the xz terms instead of the effective terms
         Q = (eps_xz*tau_xz)/(const.rho*const.Cp)
+        # Sliding friction heat production
+        tau_b = tau_xz[0]
+        u_slide = self.sliding_ratio*u_def/(1.-self.sliding_ratio)
+        self.q_b = tau_b*u_slide
 
         ### Advection Term ###
         v_x = np.insert(cumtrapz(eps_xz,self.z),0,0)    # Horizontal velocity
@@ -171,7 +177,7 @@ class numerical_model():
         self.B[-1,:] = 0.
 
         # Source Term
-        self.Tgrad = -self.qgeo/const.k             # Temperature gradient at bed
+        self.Tgrad = -(self.qgeo+self.q_b)/const.k             # Temperature gradient at bed
         self.Sdot[0] = -2*self.dz*self.Tgrad*diff/self.dt
         self.Sdot[-1] = 0.
 
@@ -184,26 +190,27 @@ class numerical_model():
 
     def melt_output(self,i,const=const):
         """
+        Calculate and save the volume melted/frozen during the time step.
         """
         # If melting
-        if np.any(self.T>self.PMP):
-            Tplus = (self.T[self.T>self.PMP]-self.PMP[self.T>self.PMP])*self.int_stencil[self.T>self.PMP]*self.dz
+        if np.any(self.T>self.pmp):
+            Tplus = (self.T[self.T>self.pmp]-self.pmp[self.T>self.pmp])*self.int_stencil[self.T>self.pmp]*self.dz
             if i%100 == 0 or self.ts[i] == self.ts[-1]:
                 self.Mrate = np.append(self.Mrate,Tplus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt))
         # If freezing
         elif self.Mcum[-1] > 0:
-            Tminus = (self.T[0]-self.PMP[0])*0.5*self.dz
-            self.T[0] = self.PMP[0]
+            Tminus = (self.T[0]-self.pmp[0])*0.5*self.dz
+            self.T[0] = self.pmp[0]
             if i%100 == 0 or self.ts[i] == self.ts[-1]:
                 self.Mrate = np.append(self.Mrate,Tminus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt))
         else:
             if i%100 == 0 or self.ts[i] == self.ts[-1]:
                 self.Mrate = np.append(self.Mrate,0.)
         # update the cumulative melt by the melt rate
-        if i%100 == 0 or self.ts[i] == self.ts[-1]:
+        if i%1000 == 0 or self.ts[i] == self.ts[-1]:
             # update the cumulative melt by the melt rate
             self.Mcum = np.append(self.Mcum,self.Mcum[-1]+self.Mrate[-1]*100*self.dt/const.spy)
-            print('dt=',self.dt/const.spy,'melt=',np.round(self.Mrate[-1]*1000.,2),np.round(self.Mcum[-1],2))
+            print('dt=',self.dt/const.spy,'melt=',np.round(self.Mrate[-1]*1000.,2),np.round(self.Mcum[-1],2),self.q_b)
 
     # ---------------------------------------------
 
@@ -222,7 +229,7 @@ class numerical_model():
         steady_iter = 0
         if verbose:
             print('Initializing',end='')
-        while any(abs(self.T-T_new)>self.tol):
+        while any(abs(self.T[1:]-T_new[1:])>self.tol):
             if verbose and steady_iter%1000==0:
                 print('.',end='')
             self.T = T_new.copy()
@@ -250,6 +257,14 @@ class numerical_model():
             # Update to current time
             self.T[-1] = self.Ts[i]  # set surface boundary condition
             adot_scale = self.adot[i]/self.adot[0]  # advection updates every time step
+            self.dH = self.dHs[i]
+            self.sliding_ratio = self.srs[i]
+            # Update heat source
+            self.source_terms()
+            diff = (const.k/(const.rho*const.Cp))*(self.dt/(self.dz**2.))
+            self.Tgrad = -(self.qgeo+self.q_b)/const.k             # Temperature gradient at bed
+            self.Sdot[0] = -2*self.dz*self.Tgrad*diff/self.dt
+            self.Sdot[-1] = 0.
             # Solve
             T_new = self.A*self.T - adot_scale*self.B*self.T + self.dt*self.Sdot
             self.T = T_new
