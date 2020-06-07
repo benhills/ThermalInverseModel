@@ -9,68 +9,15 @@ April 28, 2020
 """
 
 import numpy as np
-from forward_model import numerical_model
-from scipy.interpolate import interp1d
 from constants import constants
 const = constants()
 
-mult = np.matmul
-inv = np.linalg.inv
-tr = np.transpose
-
 z_data,T_data,C_data = np.transpose(np.load('./data/icetemp_data.npy'))
-Spice_Accumulation = np.load('./data/SP_accumulation_interpolated.npy')
-Spice_airTemp = np.load('./data/SP_airTemperature_interpolated.npy')
 
-ts = Spice_Accumulation[0]
-adot = Spice_Accumulation[1]
-Tsurf = Spice_airTemp[1]
-H = 2850.
-t_m = np.arange(min(ts),max(ts)+10000,10000)
+# --------------------------------------------------------------------------------------------------------
 
-# Initial Guess
-qgeo = .06
-gamma = 1.
-dH = np.sin(.05*np.pi/180.)
-sr = .5
-# Create model array and model step array
-m_init = np.array([qgeo,gamma])
-mstep = np.array([.001,.01])
-m_init = np.append(m_init,dH*np.ones(7))
-mstep = np.append(mstep,dH/10.*np.ones(7))
-m_init = np.append(m_init,sr*np.ones(7))
-mstep = np.append(mstep,.01*np.ones(7))
-
-def f(m,H=H,ts=ts,adot=adot,Tsurf=Tsurf,zdata=z_data,tol=1e-4):
-    print('Running Model')
-    print('m:',m)
-    fp = numerical_model()
-    fp.ts = ts[:]*const.spy
-    fp.adot = adot/const.spy
-    fp.Ts = Tsurf
-    fp.qgeo = m[0]
-    fp.gamma = m[1]
-
-    dH_interp = interp1d(t_m,m[2:9])
-    fp.dHs = dH_interp(ts)
-    fp.dH = fp.dHs[0]
-    sr_interp = interp1d(t_m,m[9:])
-    fp.srs = sr_interp(ts)
-    fp.sliding_ratio = fp.srs[0]
-    fp.initial_conditions(analytical='Rezvan')
-    fp.source_terms()
-    fp.stencil()
-    fp.tol = tol
-    fp.run(verbose=True)
-
-    Tinterp = interp1d(fp.z,fp.Ts_out[-1])
-    return Tinterp(H+zdata)
-
-
-def norm2(m,z_data=z_data,T_data=T_data):
-    T_interp = interp1d(m.z,m.T)
-    T_mod = T_interp(z_data)
-    norm = np.sum((T_data-T_mod)**2.)
+def norm2(f,m,T_data=T_data):
+    norm = np.sum((f(m)-T_data)**2.)
     return norm
 
 def cost(modeled_Temp, T_param, t_param, measured_Temp=T_data, regularization=0.0):
@@ -83,6 +30,24 @@ def cost(modeled_Temp, T_param, t_param, measured_Temp=T_data, regularization=0.
         reg = 0.0
     unreg_cost = np.sqrt(np.nansum((modeled_Temp - measured_Temp) ** 2.0))
     return unreg_cost + regularization * reg, unreg_cost
+
+def reg(m,t_m,nu1=1.,nu2=.5):
+    """
+    """
+
+    # Smoothness of deformational terms, can't change too fast
+    reg1 = nu1*np.nansum(np.gradient(np.gradient(m[2:2+len(t_m)],t_m/1e4),t_m/1e4)**2.)
+
+    # Size of sliding terms, keep them close to zero
+    reg2 = nu2*np.nansum(np.abs(m[-len(t_m):]))
+
+    return reg1+reg2
+
+# --------------------------------------------------------------------------------------------------------
+
+mult = np.matmul
+inv = np.linalg.inv
+tr = np.transpose
 
 def weakly_nonlinear(f,norm,zdata,Tdata,C,m_init,mstep,Niter=10,
                      solution_tolerance=1e-5,verbose=True):
@@ -139,6 +104,74 @@ def weakly_nonlinear(f,norm,zdata,Tdata,C,m_init,mstep,Niter=10,
         if i>1 and norm(dm)<solution_tolerance:
             return m_out[:i+1,:],d_out[:i+1,:]
 
+# --------------------------------------------------------------------------------------------------------
+
+def temp(k,kmax,a):
+    """
+    """
+    return a/(k/kmax)
+
+
+def P(cost,cost_new,T):
+    """
+    """
+    if cost_new<cost or np.isnan(cost):
+        return 1.
+    else:
+        return np.exp(-(cost_new-cost)/T)
+
+
+def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan,T_data=T_data,save_names=['Models','Pred_Data','Cost']):
+    """
+    """
+
+    # Compute cost of the new model
+    print('Run the forward problem on initial model input.')
+    predicted_data = f(m)
+    cost = np.sum((predicted_data-T_data)**2.) + reg(m,t_m)
+
+    # Create arrays for outputs
+    m_out = np.array([m])
+    Ts_out = np.array([predicted_data])
+    cost_out = np.array([cost])
+    np.save(save_names[0],m_out)
+    np.save(save_names[1],Ts_out)
+    np.save(save_names[2],cost_out)
+
+    k = 1 # Energy evaluation counter
+    while k < kmax:
+
+        # Update the model by some step of a randomly selected parameter
+        rand_ind = np.random.randint(0,len(m))
+        m_pert = m.copy()
+        m_pert[rand_ind] = m[rand_ind] + np.random.normal(0,m_step[rand_ind])
+        while m_pert[rand_ind] > m_max[rand_ind] or m_pert[rand_ind] < m_min[rand_ind]:
+            m_pert[rand_ind] = m[rand_ind] + np.random.normal(0,m_step[rand_ind])
+
+        # Compute cost of the new model
+        predicted_data = f(m_pert)
+        cost_pert = np.sum((predicted_data-T_data)**2.) + reg(m_pert,t_m)
+        print('Finished with cost:',cost_pert)
+
+        # Should we move to it?
+        if P(cost, cost_pert, temp(k,kmax,a)) > np.random.rand():
+            print('Moving to new model and saving output.')
+            m = m_pert.copy()
+            cost = cost_pert
+            # Write model and cost to file
+            m_out = np.append(m_out,[m],axis=0) # keep track of energy
+            Ts_out = np.append(Ts_out,[predicted_data],axis=0) # keep track of energy
+            cost_out = np.append(cost_out,cost) # keep track of energy
+            np.save(save_names[0],m_out)
+            np.save(save_names[1],Ts_out)
+            np.save(save_names[2],cost_out)
+
+        k += 1   # Iterate counter
+
+    return m_out,cost_out
+
+# --------------------------------------------------------------------------------------------------------
+
 def monte_carlo(f,m,msteps,Tdata=T_data,zdata=z_data,norm=norm2,
                     n_iterates=500,regularization=0.):
     """
@@ -180,6 +213,3 @@ def monte_carlo(f,m,msteps,Tdata=T_data,zdata=z_data,norm=norm2,
         np.save('Misfits',misfits)
 
     return m_out, misfits
-
-
-monte_carlo(f,m_init,mstep,n_iterates=1000)

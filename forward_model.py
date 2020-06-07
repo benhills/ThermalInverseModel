@@ -44,20 +44,25 @@ class numerical_model():
         self.H = 2857.      # Ice thickness         [m]
         self.adot = .1/const.spy      # Accumulation rate     [m/s]
         self.gamma = 1.532
-        self.p = 1000.      # Lliboutry shape factor for vertical velocity (large p is ~linear)
-        self.v_surf = 0.    # Surface velocity     [m/yr]
-        self.slide_ratio = 0.
+        self.p = 0.      # Lliboutry shape factor for vertical velocity (large p is ~linear)
 
         ### Gradients ###
         self.dTs = 0.                   # Change in air temperature over distance x/y [C/m]
         self.dH = np.sin(.2*np.pi/180.)    # Thickness gradient in x/y directions, used for deformational flow calculation        [m/m]
         self.da = 0.                    # Accumulation gradient in x/y directions     [m/yr/m]
 
+        ### Velocity Terms ###
+        self.Udef, self.Uslide = 0., 0.
+
+        ### Melting Conditions ###
+        self.Mrate = 0.
+        self.Mcum = 0.
+
         ### Empty Time Array as Default ###
         self.ts=[]
 
         ### Flags ###
-        self.flags = []
+        self.flags = ['verbose']
 
     # ---------------------------------------------
 
@@ -67,32 +72,34 @@ class numerical_model():
         with paramaters from at the beginning of the time series.
         """
 
-        # TODO: Weertman has this extra term
-        #v_z_surf = self.adot + v_surf*dH
+        if len(self.ts)>0 and 'Udefs' not in vars(self):
+            if 'verbose' in self.flags:
+                print('No velocity arrays set, setting to constant value.')
+            self.Udefs, self.Uslides = self.Udef*np.ones_like(self.ts), self.Uslide*np.ones_like(self.ts)
+
+        # Weertman (1968) has this extra term to add to the vertical velocity
         if hasattr(self.adot,"__len__"):
-            # initial temperature from analytical solution
-            if analytical == 'Robin':
-                self.z,self.T = Robin_T(self.Ts[0],self.qgeo,self.H,
-                        self.adot[0],const=const,nz=self.nz)
-            elif analytical == 'Rezvan':
-                self.z,self.T = analytical_model(self.Ts[0],self.qgeo,self.H,
-                        self.adot[0],const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
-            # vertical velocity by shape factor
-            zeta = (1.-(self.z/self.H))
-            self.v_z = self.adot[0]*(self.z/self.H)**self.gamma
-            #self.v_z = self.adot[0]*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
+            v_z_surf = self.adot[0] + self.Udef*self.dH
+            T_surf = self.Ts[0]
         else:
-            # initial temperature from analytical solution
-            if analytical == 'Robin':
-                self.z,self.T = Robin_T(self.Ts,self.qgeo,self.H,
-                        self.adot,const=const,nz=self.nz)
-            elif analytical == 'Rezvan':
-                self.z,self.T = analytical_model(self.Ts,self.qgeo,self.H,
-                        self.adot,const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
-            # vertical velocity by shape factor
+            v_z_surf = self.adot + self.Udef*self.dH
+            T_surf = self.Ts
+
+        # initial temperature from analytical solution
+        if analytical == 'Robin':
+            self.z,self.T = Robin_T(T_surf,self.qgeo,self.H,
+                    v_z_surf,const=const,nz=self.nz)
+        elif analytical == 'Rezvan':
+            self.z,self.T = analytical_model(T_surf,self.qgeo,self.H,
+                    v_z_surf,const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
+        # vertical velocity
+        if self.p == 0.:
+            # by exponent, gamma
+            self.v_z = v_z_surf*(self.z/self.H)**self.gamma
+        else:
+            # by shape factor, p
             zeta = (1.-(self.z/self.H))
-            self.v_z = self.adot*(self.z/self.H)**self.gamma
-            #self.v_z = self.adot*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
+            self.v_z = v_z_surf*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
 
         ### Discretize the vertical coordinate ###
         self.dz = np.mean(np.gradient(self.z))      # Vertical step
@@ -108,17 +115,15 @@ class numerical_model():
         ### Strain Heat Production ###
         # Shear Stress by Lamellar Flow (van der Veen section 4.2)
         tau_xz = const.rho*const.g*(self.H-self.z)*abs(self.dH)
-        # Calculate the viscosity TODO: add option for optimization to surface velocity
-        A = viscosity(self.T,self.z,const=const,tau_xz=tau_xz,v_surf=None)
+        # Calculate the viscosity
+        A = viscosity(self.T,self.z,const=const,tau_xz=tau_xz,v_surf=self.Udef*const.spy)
         # Strain rate, Weertman (1968) eq. 7
-        eps_xz = A*tau_xz**const.n
-        u_def = np.trapz(eps_xz,self.z)
-        # strain heat term (K s-1) TODO: check that it is ok to use the xz terms instead of the effective terms
-        Q = (eps_xz*tau_xz)/(const.rho*const.Cp)
+        eps_xz = (A*tau_xz**const.n)/const.spy
+        # strain heat term (K s-1)
+        Q = 2.*(eps_xz*tau_xz)/(const.rho*const.Cp)
         # Sliding friction heat production
-        tau_b = tau_xz[0]
-        u_slide = self.sliding_ratio*u_def/(1.-self.sliding_ratio)
-        self.q_b = tau_b*u_slide
+        self.tau_b = tau_xz[0]
+        self.q_b = self.tau_b*self.Uslide
 
         ### Advection Term ###
         v_x = np.insert(cumtrapz(eps_xz,self.z),0,0)    # Horizontal velocity
@@ -139,8 +144,8 @@ class numerical_model():
 
         # Choose time step
         if 'steady' in self.flags:
-            # TODO: why was this chosen, what is this equation?
-            self.dt = 0.5*self.dz**2./(const.k/(const.rho*const.Cp))
+            # set time step with CFL
+            self.dt = 0.5*self.dz/np.max(self.v_z)
         else:
             # Check if the time series is monotonically increasing
             if len(self.ts) == 0:
@@ -149,18 +154,18 @@ class numerical_model():
                 raise ValueError("Time series must monotonically increase.")
             self.dt = np.mean(np.gradient(self.ts))
         # Stability, check the CFL
-        if max(self.v_z)*self.dt/self.dz > 1.:
+        if np.max(self.v_z)*self.dt/self.dz > 1.:
             print('CFL = ',max(self.v_z)*self.dt/self.dz,'; cannot be > 1.')
             print('dt = ',self.dt/const.spy,' years')
             print('dz = ',self.dz,' meters')
             raise ValueError("Numerically unstable, choose a smaller time step or a larger spatial step.")
 
         # Stencils
-        diff = (const.k/(const.rho*const.Cp))*(self.dt/(self.dz**2.))
+        self.diff = (const.k/(const.rho*const.Cp))*(self.dt/(self.dz**2.))
         self.A = sparse.lil_matrix((self.nz, self.nz))           # Create a sparse Matrix
-        self.A.setdiag((1.-2.*diff)*np.ones(self.nz))            # Set the diagonal
-        self.A.setdiag((1.*diff)*np.ones(self.nz),k=-1)          # Set the diagonal
-        self.A.setdiag((1.*diff)*np.ones(self.nz),k=1)           # Set the diagonal
+        self.A.setdiag((1.-2.*self.diff)*np.ones(self.nz))            # Set the diagonal
+        self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=-1)          # Set the diagonal
+        self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=1)           # Set the diagonal
         self.B = sparse.lil_matrix((self.nz, self.nz))           # Create a sparse Matrix
         for i in range(len(self.z)):
             adv = (-self.v_z[i]*self.dt/self.dz)
@@ -169,7 +174,7 @@ class numerical_model():
 
         # Boundary Conditions
         # Neumann at bed
-        self.A[0,1] = 2.*diff
+        self.A[0,1] = 2.*self.diff
         self.B[0,:] = 0.
         # Dirichlet at surface
         self.A[-1,:] = 0.
@@ -178,68 +183,44 @@ class numerical_model():
 
         # Source Term
         self.Tgrad = -(self.qgeo+self.q_b)/const.k             # Temperature gradient at bed
-        self.Sdot[0] = -2*self.dz*self.Tgrad*diff/self.dt
+        self.Sdot[0] = -2*self.dz*self.Tgrad*self.diff/self.dt
         self.Sdot[-1] = 0.
 
-        if 'melt' in self.flags:
-            self.int_stencil = np.ones_like(self.z)
-            self.int_stencil[[0,-1]] = 0.5
-
-
-    # ---------------------------------------------
-
-    def melt_output(self,i,const=const):
-        """
-        Calculate and save the volume melted/frozen during the time step.
-        """
-        # If melting
-        if np.any(self.T>self.pmp):
-            Tplus = (self.T[self.T>self.pmp]-self.pmp[self.T>self.pmp])*self.int_stencil[self.T>self.pmp]*self.dz
-            if i%100 == 0 or self.ts[i] == self.ts[-1]:
-                self.Mrate = np.append(self.Mrate,Tplus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt))
-        # If freezing
-        elif self.Mcum[-1] > 0:
-            Tminus = (self.T[0]-self.pmp[0])*0.5*self.dz
-            self.T[0] = self.pmp[0]
-            if i%100 == 0 or self.ts[i] == self.ts[-1]:
-                self.Mrate = np.append(self.Mrate,Tminus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt))
-        else:
-            if i%100 == 0 or self.ts[i] == self.ts[-1]:
-                self.Mrate = np.append(self.Mrate,0.)
-        # update the cumulative melt by the melt rate
-        if i%1000 == 0 or self.ts[i] == self.ts[-1]:
-            # update the cumulative melt by the melt rate
-            self.Mcum = np.append(self.Mcum,self.Mcum[-1]+self.Mrate[-1]*100*self.dt/const.spy)
-            print('dt=',self.dt/const.spy,'melt=',np.round(self.Mrate[-1]*1000.,2),np.round(self.Mcum[-1],2),self.q_b)
+        # Integration stencil to calculate melt near the bottom of the profile
+        self.int_stencil = np.ones_like(self.z)
+        self.int_stencil[[0,-1]] = 0.5
 
     # ---------------------------------------------
 
-    def run(self,const=const,verbose=True):
+    def run(self,const=const):
         """
         Run the finite-difference model as it has been set up through the other functions.
         """
 
-        self.Ts_out = np.empty((0,len(self.T)))
-        if 'melt' in self.flags:
-            self.Mrate = np.empty((0))
-            self.Mcum = np.array([0])
+        if 'save_all' in self.flags:
+            self.Ts_out = np.empty((0,len(self.T)))
+            self.Mrate_all = np.empty((0))
+            self.Mcum_all = np.array([0])
 
         # Run the initial conditions until stable
         T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
         steady_iter = 0
-        if verbose:
+        if 'verbose' in self.flags:
             print('Initializing',end='')
         while any(abs(self.T[1:]-T_new[1:])>self.tol):
-            if verbose and steady_iter%1000==0:
+            if 'verbose' in self.flags and steady_iter%1000==0:
                 print('.',end='')
             self.T = T_new.copy()
             T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
             T_new[T_new>self.pmp] = self.pmp[T_new>self.pmp]
             steady_iter += 1
         self.T = T_new.copy()
+        if 'verbose' in self.flags:
+            print('')
 
+        # If a steady state model is desired
         if 'steady' in self.flags:
-            if verbose:
+            if 'verbose' in self.flags:
                 print('Exiting model at steady state condition.')
             # Run one more time to see how much things are changing still
             T_steady = self.A*self.T - self.B*self.T + self.dt*self.Sdot
@@ -248,29 +229,55 @@ class numerical_model():
             self.Ts_out = np.append(self.Ts_out,[T_steady],axis=0)
             return
 
-        # iterate through all times
-        for i in range(len(self.ts)):
-            if i%1000 == 0:
-                if verbose:
-                    print(int(self.ts[i]/const.spy),end=',')
-                self.Ts_out = np.append(self.Ts_out,[self.T],axis=0)
-            # Update to current time
-            self.T[-1] = self.Ts[i]  # set surface boundary condition
-            adot_scale = self.adot[i]/self.adot[0]  # advection updates every time step
-            self.dH = self.dHs[i]
-            self.sliding_ratio = self.srs[i]
-            # Update heat source
-            self.source_terms()
-            diff = (const.k/(const.rho*const.Cp))*(self.dt/(self.dz**2.))
-            self.Tgrad = -(self.qgeo+self.q_b)/const.k             # Temperature gradient at bed
-            self.Sdot[0] = -2*self.dz*self.Tgrad*diff/self.dt
-            self.Sdot[-1] = 0.
-            # Solve
-            T_new = self.A*self.T - adot_scale*self.B*self.T + self.dt*self.Sdot
-            self.T = T_new
-            # Output basal melting or freezeing
-            if 'melt' in self.flags:
-                self.melt_output(i,const=const)
-            # reset temp to PMP
-            self.T[self.T>self.pmp] = self.pmp[self.T>self.pmp]
+        # ---
 
+        # If a non-steady model is desired iterate through all times
+        for i in range(len(self.ts)):
+
+            ### Print and output
+            if i%1000 == 0 or self.ts[i] == self.ts[-1]:
+                if 'verbose' in self.flags:
+                    print('t =',int(self.ts[i]/const.spy),'; dt =',self.dt/const.spy,'; melt rate =',np.round(self.Mrate*1000.,2),'; melt cum = ',np.round(self.Mcum,2),'; q_b = ',self.q_b)
+                if 'save_all' in self.flags:
+                    self.Mrate_all = np.append(self.Mrate_all,self.Mrate)
+                    self.Mcum_all = np.append(self.Mcum_all,self.Mrate)
+                    self.Ts_out = np.append(self.Ts_out,[self.T],axis=0)
+
+            ### Update to current time
+            self.Udef,self.Uslide = self.Udefs[i],self.Uslides[i]   # update the velocity terms from input
+            self.T[-1] = self.Ts[i]  # set surface temperature condition from input
+            v_z_surf = self.adot[i] + self.Udef*self.dH # set vertical velocity from input terms (accumulation and surface velocity)
+            if self.p == 0.: # by exponent, gamma
+                self.v_z = self.Mrate + v_z_surf*(self.z/self.H)**self.gamma
+            else: # by shape factor, p
+                zeta = (1.-(self.z/self.H))
+                self.v_z = v_z_surf*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
+            for i in range(len(self.z)):
+                adv = (-self.v_z[i]*self.dt/self.dz)
+                self.B[i,i] = adv
+                self.B[i,i-1] = -adv
+            # Boundary Conditions
+            self.B[0,:] = 0.  # Neumann at bed
+            self.B[-1,:] = 0. # Dirichlet at surface
+            if i%1000 == 0: # Only update the deformational heat source periodically because it is computationally expensive
+                self.source_terms()
+            self.q_b = self.tau_b*self.Uslide # Update sliding heat flux
+            self.Tgrad = -(self.qgeo+self.q_b)/const.k  # Temperature gradient at bed updated from sliding heat flux
+            self.Sdot[0],self.Sdot[-1] = -2*self.dz*self.Tgrad*self.diff/self.dt, 0. # update boundaries on heat source vector
+
+            ### Solve
+            T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
+            self.T = T_new
+
+            ### Calculate the volume melted/frozen during the time step.
+            if np.any(self.T>self.pmp): # If Melting
+                Tplus = (self.T[self.T>self.pmp]-self.pmp[self.T>self.pmp])*self.int_stencil[self.T>self.pmp]*self.dz
+                self.Mrate = Tplus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt)
+            elif self.Mcum > 0: # If freezing
+                Tminus = (self.T[0]-self.pmp[0])*0.5*self.dz
+                self.T[0] = self.pmp[0]
+                self.Mrate = Tminus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt)
+            self.Mcum += self.Mrate*self.dt/const.spy # Update the cumulative melt by the melt rate
+
+            ### reset temp to PMP
+            self.T[self.T>self.pmp] = self.pmp[self.T>self.pmp]
