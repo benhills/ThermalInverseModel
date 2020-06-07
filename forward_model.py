@@ -248,10 +248,10 @@ class numerical_model():
             self.T[-1] = self.Ts[i]  # set surface temperature condition from input
             v_z_surf = self.adot[i] + self.Udef*self.dH # set vertical velocity from input terms (accumulation and surface velocity)
             if self.p == 0.: # by exponent, gamma
-                self.v_z = self.Mrate + v_z_surf*(self.z/self.H)**self.gamma
+                self.v_z = self.Mrate/const.spy + v_z_surf*(self.z/self.H)**self.gamma
             else: # by shape factor, p
                 zeta = (1.-(self.z/self.H))
-                self.v_z = v_z_surf*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
+                self.v_z = self.Mrate/const.spy + v_z_surf*(1.-((self.p+2.)/(self.p+1.))*zeta+(1./(self.p+1.))*zeta**(self.p+2.))
             for i in range(len(self.z)):
                 adv = (-self.v_z[i]*self.dt/self.dz)
                 self.B[i,i] = adv
@@ -269,15 +269,22 @@ class numerical_model():
             T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
             self.T = T_new
 
-            ### Calculate the volume melted/frozen during the time step.
+            ### Calculate the volume melted/frozen during the time step, then hard reset to pmp.
             if np.any(self.T>self.pmp): # If Melting
-                Tplus = (self.T[self.T>self.pmp]-self.pmp[self.T>self.pmp])*self.int_stencil[self.T>self.pmp]*self.dz
-                self.Mrate = Tplus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt)
+                Tplus = (self.T[self.T>self.pmp]-self.pmp[self.T>self.pmp])*self.int_stencil[self.T>self.pmp]*self.dz # Integrate the temperature above PMP (units- degCm)
+                self.Mrate = np.sum(Tplus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt)) # calculate the melt rate in m/yr
+                self.T[self.T>self.pmp] = self.pmp[self.T>self.pmp] # reset temp to PMP
+                self.Mcum += self.Mrate*self.dt/const.spy # Update the cumulative melt by the melt rate
             elif self.Mcum > 0: # If freezing
-                Tminus = (self.T[0]-self.pmp[0])*0.5*self.dz
-                self.T[0] = self.pmp[0]
-                self.Mrate = Tminus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt)
-            self.Mcum += self.Mrate*self.dt/const.spy # Update the cumulative melt by the melt rate
-
-            ### reset temp to PMP
-            self.T[self.T>self.pmp] = self.pmp[self.T>self.pmp]
+                Tminus = (self.T[0]-self.pmp[0])*0.5*self.dz # temperature below the PMP; this is only for the point at the bed because we assume water drains
+                self.Mrate = Tminus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt) # melt rate should be negative now.
+                if self.Mrate*self.dt/const.spy < self.Mcum: # If the amount frozen this time step is less than water available
+                    self.T[0] = self.pmp[0] # reset to PMP
+                    self.Mcum += self.Mrate*self.dt/const.spy # Update the cumulative melt by the melt rate
+                else: # If the amount frozen this time step is more than water available
+                    M_ = (self.Mrate*self.dt/const.spy-self.Mcum) # calculate the 'extra' amount frozen in m
+                    Tminus = M_*(const.rhow*const.L)/(const.rho*const.Cp) # What is the equivalent temperature to cool bottom node (units - degCm)
+                    self.T[0] = Tminus/(0.5*self.dz) + self.pmp[0] # update the temperature at the bed
+                    self.Mcum = 0. # cumulative melt to zero because everything is frozen
+            else:
+                self.Mrate = 0.

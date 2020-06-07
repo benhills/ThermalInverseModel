@@ -52,6 +52,8 @@ def f(m,H=H,ts=ts,adot=adot,Tsurf=Tsurf,zdata=z_data,tol=1e-4,t_m=t_m):
     fp.ts = ts[:]*const.spy
     fp.adot = adot/const.spy
     fp.Ts = Tsurf
+    fp.qgeo = m[0]
+    fp.gamma = m[1]
     Udef_interp = interp1d(t_m,m_init[2:2+len(t_m)]/const.spy)
     Uslide_interp = interp1d(t_m,m_init[-len(t_m):]/const.spy)
     fp.Udefs = Udef_interp(ts)
