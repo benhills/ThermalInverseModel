@@ -49,35 +49,35 @@ mult = np.matmul
 inv = np.linalg.inv
 tr = np.transpose
 
-def weakly_nonlinear(f,norm,zdata,Tdata,C,m_init,mstep,Niter=10,
+def weakly_nonlinear(f,norm,zdata,Tdata,C,m_init,mstep,nu,L,Niter=10,
                      solution_tolerance=1e-5,verbose=True):
     """
 
     """
 
     # Set up matrices for output
-    m_out = np.zeros((Niter,len(m_init)))
+    m_out = np.zeros((Niter+1,len(m_init)))
     m_out[0,:] = m_init  # model at each iteration
-    d_out = np.zeros((Niter,len(Tdata)))
+    d_out = np.zeros((Niter+1,len(Tdata)))
     d_out[0,:]=f(m_init)     # modeled data vector at each iteration
     if verbose:
         print('Initial model')
-        print('Data residual norm:',norm(Tdata-f(m_init)))
+        print('Data residual norm:',norm(Tdata-d_out[0,:]))
 
     # Initialize the Jacobian to be filled in
     A = np.zeros((len(Tdata),len(m_init)))
 
     # Start iterating
     m = m_init.copy()
-    for i in range(1,Niter):
+    for i in range(1,Niter+1):
         print('Iteration #', i)
 
         # Calculate the data residual vector
-        dd = Tdata - f(m)
+        f0 = f(m)
+        dd = Tdata - f0
         ddw = mult(C,dd)
 
         # Calculate the Jacobian matrix.
-        f0 = f(m)
         for j in range(len(m)):
             mJ = m.copy()
             mJ[j] += mstep[j]
@@ -85,10 +85,21 @@ def weakly_nonlinear(f,norm,zdata,Tdata,C,m_init,mstep,Niter=10,
         Aw = mult(C,A)
 
         # Linearize equation to solve for the model step, dm
-        dm = mult(inv(mult(tr(Aw),Aw)),mult(tr(Aw),ddw))
+        try:
+            dm = mult(inv(mult(tr(Aw),Aw)+nu**2.*mult(tr(L),L)),(mult(tr(Aw),ddw)-(nu**2.*mult(mult(tr(L),L),m))))
+        except:
+            print('Could not solve inversion, exiting.')
+            print('Aw =', Aw)
+            print('ddw =', ddw)
+            return m_out[:i,:],d_out[:i,:]
 
-        while norm(Tdata-f(m+dm)) > norm(dd) or (m[2]+dm[2])<0:
+        while np.any((m+dm)<0.):
             dm /= 2.
+
+        fnew = f(m+dm)
+        while norm(Tdata-fnew) + nu*np.dot(np.dot(tr(m+dm),tr(L)),np.dot(L,m+dm)) > norm(dd) + nu*np.dot(np.dot(tr(m),tr(L)),np.dot(L,m)):
+            dm /= 2.
+            fnew = f(m+dm)
 
         # Update the model
         m += dm
@@ -98,11 +109,13 @@ def weakly_nonlinear(f,norm,zdata,Tdata,C,m_init,mstep,Niter=10,
             print('Data residual norm:',norm(Tdata-f(m)))
             print('Norm of model step, dm:',norm(dm))
         m_out[i,:] = m
-        d_out[i,:]=f(m)
+        d_out[i,:]=fnew
 
         # If convergence criteria is met, break out of loop
         if i>1 and norm(dm)<solution_tolerance:
             return m_out[:i+1,:],d_out[:i+1,:]
+    print('Finished all iterations,',Niter,', without converging.')
+    return m_out,d_out
 
 # --------------------------------------------------------------------------------------------------------
 

@@ -126,12 +126,12 @@ class numerical_model():
         self.q_b = self.tau_b*self.Uslide
 
         ### Advection Term ###
-        v_x = np.insert(cumtrapz(eps_xz,self.z),0,0)    # Horizontal velocity
+        v_x = self.Uslide + np.insert(cumtrapz(eps_xz,self.z),0,0)    # Horizontal velocity
         # Horizontal Temperature Gradients, Weertman (1968) eq. 6b
         dTdx = self.dTs + (self.T-np.mean(self.Ts))/2.*(1./self.H*self.dH-(1./np.mean(self.adot))*self.da)
 
         ### Final Source Term ###
-        self.Sdot = Q - v_x*dTdx
+        self.Sdot = Q #- v_x*dTdx
 
     # ---------------------------------------------
 
