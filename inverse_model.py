@@ -128,7 +128,7 @@ def temp(k,kmax,a):
 def P(cost,cost_new,T):
     """
     """
-    if cost_new<cost or np.isnan(cost):
+    if cost_new<cost:
         return 1.
     else:
         return np.exp(-(cost_new-cost)/T)
@@ -149,7 +149,9 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
         # Compute cost of the new model
         print('Run the forward problem on initial model input.')
         predicted_data = f(m)
-        cost = np.sum((predicted_data-T_data)**2.) + reg(m,t_m)
+        cost = np.sum((predicted_data-T_data)**2.)
+        if reg is not None:
+            cost += reg(m,t_m)
 
         # Create arrays for outputs
         m_out = np.array([m])
@@ -171,7 +173,9 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
 
         # Compute cost of the new model
         predicted_data = f(m_pert)
-        cost_pert = np.sum((predicted_data-T_data)**2.) + reg(m_pert,t_m)
+        cost_pert = np.sum((predicted_data-T_data)**2.)
+        if reg is not None:
+            cost_pert += reg(m_pert,t_m)
         print('Finished with cost:',cost_pert)
 
         # Should we move to it?

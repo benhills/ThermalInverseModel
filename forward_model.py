@@ -41,7 +41,7 @@ class numerical_model():
         ### Boundary Constraints ###
         self.Ts = -50.      # Surface Temperature   [C]
         self.qgeo = .050    # Geothermal flux       [W/m2]
-        self.H = 2857.      # Ice thickness         [m]
+        self.H = 2850.      # Ice thickness         [m]
         self.adot = .1/const.spy      # Accumulation rate     [m/s]
         self.gamma = 1.532
         self.p = 0.      # Lliboutry shape factor for vertical velocity (large p is ~linear)
@@ -131,7 +131,7 @@ class numerical_model():
         dTdx = self.dTs + (self.T-np.mean(self.Ts))/2.*(1./self.H*self.dH-(1./np.mean(self.adot))*self.da)
 
         ### Final Source Term ###
-        self.Sdot = Q #- v_x*dTdx
+        self.Sdot = Q - v_x*dTdx
 
     # ---------------------------------------------
 
@@ -275,7 +275,7 @@ class numerical_model():
                 self.Mrate = np.sum(Tplus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt)) # calculate the melt rate in m/yr
                 self.T[self.T>self.pmp] = self.pmp[self.T>self.pmp] # reset temp to PMP
                 self.Mcum += self.Mrate*self.dt/const.spy # Update the cumulative melt by the melt rate
-            elif self.Mcum > 0: # If freezing
+            elif self.Mcum > 0 and 'water_cum' in self.flags: # If freezing
                 Tminus = (self.T[0]-self.pmp[0])*0.5*self.dz # temperature below the PMP; this is only for the point at the bed because we assume water drains
                 self.Mrate = Tminus*const.rho*const.Cp*const.spy/(const.rhow*const.L*self.dt) # melt rate should be negative now.
                 if self.Mrate*self.dt/const.spy < self.Mcum: # If the amount frozen this time step is less than water available
