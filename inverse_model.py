@@ -31,7 +31,7 @@ def cost(modeled_Temp, T_param, t_param, measured_Temp=T_data, regularization=0.
     unreg_cost = np.sqrt(np.nansum((modeled_Temp - measured_Temp) ** 2.0))
     return unreg_cost + regularization * reg, unreg_cost
 
-def reg(m,t_m,nu1=1.,nu2=.5):
+def reg(m,t_m,nu1=2.,nu2=1.5):
     """
     """
 
@@ -97,7 +97,7 @@ def weakly_nonlinear(f,norm,zdata,Tdata,C,m_init,mstep,nu,L,Niter=10,
             dm /= 2.
 
         fnew = f(m+dm)
-        while norm(Tdata-fnew) + nu*np.dot(np.dot(tr(m+dm),tr(L)),np.dot(L,m+dm)) > norm(dd) + nu*np.dot(np.dot(tr(m),tr(L)),np.dot(L,m)):
+        while norm(mult(C,Tdata-fnew)) + nu*np.dot(np.dot(tr(m+dm),tr(L)),np.dot(L,m+dm)) > norm(ddw) + nu*np.dot(np.dot(tr(m),tr(L)),np.dot(L,m)):
             dm /= 2.
             fnew = f(m+dm)
 
@@ -134,22 +134,30 @@ def P(cost,cost_new,T):
         return np.exp(-(cost_new-cost)/T)
 
 
-def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan,T_data=T_data,save_names=['Models','Pred_Data','Cost']):
+def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan,T_data=T_data,save_names=['Models','Pred_Data','Cost'],restart=False):
     """
     """
 
-    # Compute cost of the new model
-    print('Run the forward problem on initial model input.')
-    predicted_data = f(m)
-    cost = np.sum((predicted_data-T_data)**2.) + reg(m,t_m)
+    if restart:
+        m_out = np.load(save_names[0]+'.npy')
+        m = m_out[-1]
+        Ts_out = np.load(save_names[1]+'.npy')
+        cost_out = np.load(save_names[2]+'.npy')
+        cost = cost_out[-1]
 
-    # Create arrays for outputs
-    m_out = np.array([m])
-    Ts_out = np.array([predicted_data])
-    cost_out = np.array([cost])
-    np.save(save_names[0],m_out)
-    np.save(save_names[1],Ts_out)
-    np.save(save_names[2],cost_out)
+    else:
+        # Compute cost of the new model
+        print('Run the forward problem on initial model input.')
+        predicted_data = f(m)
+        cost = np.sum((predicted_data-T_data)**2.) + reg(m,t_m)
+
+        # Create arrays for outputs
+        m_out = np.array([m])
+        Ts_out = np.array([predicted_data])
+        cost_out = np.array([cost])
+        np.save(save_names[0],m_out)
+        np.save(save_names[1],Ts_out)
+        np.save(save_names[2],cost_out)
 
     k = 1 # Energy evaluation counter
     while k < kmax:

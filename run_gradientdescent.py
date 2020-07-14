@@ -25,14 +25,17 @@ Tsurf = Spice_airTemp[1]
 H = 2850.
 
 # Use constant uncertainty
-C = np.diag(1/.15*np.ones(len(C_data)))
+#C = np.diag(1/.15*np.ones(len(C_data)))
+C = np.diag(1./C_data)
 
 # Times to interpolate on
 t_m = 20000*np.log(np.linspace(0,np.exp(max(ts)/20000),5))
 t_m[0] = 0.
 
+#m_init = np.array([6., 1.4, 5., 5., 5., 5., 5.,
+#                0., 0., 0.,  0., 0.])
 m_init = np.array([6.148453, 1.32109605, 7.33058424, 6.31995724, 4.53084996, 3.58193804,
-                   2.85807974, 1.94213404, 0.58012404, 0.1134321,  0.27526652, 3.08104113])
+    2.85807974, 1.94213404, 0.58012404, 0.1134321, 0.27526652, 3.08104113])
 m_step = np.array([.1,0.1])
 m_step = np.append(m_step,.1*np.ones_like(t_m))
 m_step = np.append(m_step,.1*np.ones_like(t_m))
@@ -75,6 +78,8 @@ for i in np.arange(7,len(m_init)):
 from inverse_model import weakly_nonlinear
 def norm2(r):
     return np.nansum(r**2.)
-nu = 0.
+nu = 10.0
 m_out,d_out = weakly_nonlinear(f,norm2,z_data,T_data,C,m_init,m_step,nu,L,Niter=10,
-                               solution_tolerance=1e-5)
+                               solution_tolerance=1e-4)
+np.save('GradientDescent_Models_Cbed_nu%s'%nu,m_out)
+np.save('GradientDescent_Data_Cbed_nu%s'%nu,d_out)
