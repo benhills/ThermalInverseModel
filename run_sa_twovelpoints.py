@@ -33,7 +33,7 @@ uslide1 = 0.
 t0 = 40.
 m_init = np.array([q_geo,p,udef,uslide0,uslide1,t0])
 # Model step
-m_step = np.array([0.01,0.1,1.,.5,.5,.5,1.])
+m_step = np.array([0.01,1.,.5,.5,.5,1.])
 # Model min/max
 m_min = np.zeros_like(m_init)
 m_max = np.array([.1,100.,20.,20.,20.,np.nanmax(ts)])
@@ -79,4 +79,4 @@ def f_parallel(m,Hs=np.array([2810,2850]),cum_flags=np.array([False,True]),
     return T_out
 
 from inverse_model import simulated_annealing
-simulated_annealing(f_parallel,None,m_init,m_step,m_min,m_max,None,kmax=10000,a=2)
+simulated_annealing(f_parallel,None,m_init,m_step,m_min,m_max,None,kmax=10000,a=1e7)

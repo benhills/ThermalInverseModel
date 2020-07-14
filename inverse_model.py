@@ -164,6 +164,8 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
     k = 1 # Energy evaluation counter
     while k < kmax:
 
+        print('Iteration Number:',k)
+
         # Update the model by some step of a randomly selected parameter
         rand_ind = np.random.randint(0,len(m))
         m_pert = m.copy()
@@ -180,7 +182,8 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
 
         # Should we move to it?
         if P(cost, cost_pert, temp(k,kmax,a)) > np.random.rand():
-            print('Moving to new model and saving output.')
+            print('Model accepted with temperature:',temp(k,kmax,a),', and likelihood of acceptance:',P(cost,cost_pert,temp(k,kmax,a)))
+            print('Moving to new state and saving output.')
             m = m_pert.copy()
             cost = cost_pert
             # Write model and cost to file
@@ -190,8 +193,13 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
             np.save(save_names[0],m_out)
             np.save(save_names[1],Ts_out)
             np.save(save_names[2],cost_out)
+        else:
+            print('Model declined with temperature:',temp(k,kmax,a),', and likelihood of acceptance:',P(cost,cost_pert,temp(k,kmax,a)))
+            print('Using the previous model state.')
 
         k += 1   # Iterate counter
+
+        print('\n')
 
     return m_out,cost_out
 
