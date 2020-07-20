@@ -12,6 +12,7 @@ April 28, 2020
 import numpy as np
 from scipy import sparse
 from scipy.integrate import cumtrapz
+from scipy.interpolate import interp1d
 from supporting_functions import analytical_model, viscosity, Robin_T
 from constants import constants
 const = constants()
@@ -53,6 +54,9 @@ class numerical_model():
 
         ### Velocity Terms ###
         self.Udef, self.Uslide = 0., 0.
+
+        ### Thickness Change (default to None) ###
+        self.Hs = None
 
         ### Melting Conditions ###
         self.Mrate = 0.
@@ -192,6 +196,47 @@ class numerical_model():
 
     # ---------------------------------------------
 
+    def thickness_update(self,H_new,T_upper=None):
+        # If no upper fill value is provided, use the current surface temperature
+        if T_upper is None:
+            T_upper = self.T[-1]
+        # Build an interpolator from the prior state
+        T_interp = interp1d(self.z,self.T,fill_value=(np.nan,T_upper),bounds_error=False)
+        # Interpolate for new temperatures
+        self.z = np.linspace(0.,H_new,self.nz)
+        self.T = T_interp(self.z)
+
+        # Assign the new thickness value
+        self.H = H_new
+
+        # Update variables that are thickness dependent
+        self.dz = np.mean(np.gradient(self.z))      # Vertical step
+        self.P = const.rho*const.g*(self.H-self.z)  # Pressure
+        self.pmp = self.P*const.beta                # Pressure melting
+
+        # Stability, check the CFL
+        if np.max(self.v_z)*self.dt/self.dz > 1.:
+            print('CFL = ',max(self.v_z)*self.dt/self.dz,'; cannot be > 1.')
+            print('dt = ',self.dt/const.spy,' years')
+            print('dz = ',self.dz,' meters')
+            raise ValueError("Numerically unstable, choose a smaller time step or a larger spatial step.")
+
+        # Update stencils
+        self.diff = (const.k/(const.rho*const.Cp))*(self.dt/(self.dz**2.))
+        self.A.setdiag((1.-2.*self.diff)*np.ones(self.nz))            # Set the diagonal
+        self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=-1)          # Set the diagonal
+        self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=1)           # Set the diagonal
+        for i in range(len(self.z)):
+            adv = (-self.v_z[i]*self.dt/self.dz)
+            self.B[i,i] = adv
+            self.B[i,i-1] = -adv
+        # Boundary Conditions
+        self.A[0,1] = 2.*self.diff
+        # Source Term
+        self.Sdot[0] = -2*self.dz*self.Tgrad*self.diff/self.dt
+
+    # ---------------------------------------------
+
     def run(self,const=const):
         """
         Run the finite-difference model as it has been set up through the other functions.
@@ -247,6 +292,9 @@ class numerical_model():
             self.Udef,self.Uslide = self.Udefs[i],self.Uslides[i]   # update the velocity terms from input
             self.T[-1] = self.Ts[i]  # set surface temperature condition from input
             v_z_surf = self.adot[i] + self.Udef*self.dH # set vertical velocity from input terms (accumulation and surface velocity)
+            if self.Hs is not None:
+                self.thickness_update(self.Hs[i]) # thickness update
+            # update the thickness
             if self.p == 0.: # by exponent, gamma
                 self.v_z = self.Mrate/const.spy + v_z_surf*(self.z/self.H)**self.gamma
             else: # by shape factor, p
