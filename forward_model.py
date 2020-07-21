@@ -221,19 +221,17 @@ class numerical_model():
             print('dz = ',self.dz,' meters')
             raise ValueError("Numerically unstable, choose a smaller time step or a larger spatial step.")
 
-        # Update stencils
+        # Update diffusion stencil (advection gets updated with velocity profile)
         self.diff = (const.k/(const.rho*const.Cp))*(self.dt/(self.dz**2.))
         self.A.setdiag((1.-2.*self.diff)*np.ones(self.nz))            # Set the diagonal
         self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=-1)          # Set the diagonal
         self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=1)           # Set the diagonal
-        for i in range(len(self.z)):
-            adv = (-self.v_z[i]*self.dt/self.dz)
-            self.B[i,i] = adv
-            self.B[i,i-1] = -adv
         # Boundary Conditions
+        # Neumann at bed
         self.A[0,1] = 2.*self.diff
-        # Source Term
-        self.Sdot[0] = -2*self.dz*self.Tgrad*self.diff/self.dt
+        # Dirichlet at surface
+        self.A[-1,:] = 0.
+        self.A[-1,-1] = 1.
 
     # ---------------------------------------------
 
@@ -246,6 +244,8 @@ class numerical_model():
             self.Ts_out = np.empty((0,len(self.T)))
             self.Mrate_all = np.empty((0))
             self.Mcum_all = np.array([0])
+            if self.Hs is not None:
+                self.zs_out = np.empty((0,len(self.z)))
 
         # Run the initial conditions until stable
         T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
@@ -270,8 +270,9 @@ class numerical_model():
             # Run one more time to see how much things are changing still
             T_steady = self.A*self.T - self.B*self.T + self.dt*self.Sdot
             T_steady[T_steady>self.pmp] = self.pmp[T_steady>self.pmp]
-            self.Ts_out = np.append(self.Ts_out,[self.T],axis=0)
-            self.Ts_out = np.append(self.Ts_out,[T_steady],axis=0)
+            if 'save_all' in self.flags:
+                self.Ts_out = np.append(self.Ts_out,[self.T],axis=0)
+                self.Ts_out = np.append(self.Ts_out,[T_steady],axis=0)
             return
 
         # ---
@@ -287,6 +288,8 @@ class numerical_model():
                     self.Mrate_all = np.append(self.Mrate_all,self.Mrate)
                     self.Mcum_all = np.append(self.Mcum_all,self.Mrate)
                     self.Ts_out = np.append(self.Ts_out,[self.T],axis=0)
+                    if self.Hs is not None:
+                        self.zs_out = np.append(self.zs_out,[self.z],axis=0)
 
             ### Update to current time
             self.Udef,self.Uslide = self.Udefs[i],self.Uslides[i]   # update the velocity terms from input
