@@ -19,15 +19,17 @@ const = constants()
 
 class numerical_model():
     """
-    1-D finite difference model for ice temperature based on
+    1-D finite-difference model for ice temperature based on
     Weertman (1968)
 
     Assumptions:
-        1) Initialize to 1-D Analytical temperature profile from Rezvanbehbahani et al. (2019)
-        2) Finite difference solution
-        3) Horizontal velocity...
-        4) Vertical velocity...
-        5) Strain rates...
+        1) Initialize to 1-D Analytical temperature profile from either Robin (1955) or Rezvanbehbahani et al. (2019)
+            then spin up the numbercal model to steady state until all points are changing by less then 'tol' every time step.
+        2) Horizontal velocity
+            Shear stress for lamellar flow then optimize the viscosity to match the surface velocity.
+        3) Vertical velocity
+            Two options:    first is to use an exponential form as in Rezvanbehbahani et al. (2019)
+                            second is to use the shape factor, p, as from Lliboutry
     """
 
     def __init__(self,const=const):
@@ -40,27 +42,28 @@ class numerical_model():
         self.tol=1e-4       # Convergence criteria
 
         ### Boundary Constraints ###
-        self.Ts = -50.      # Surface Temperature   [C]
-        self.qgeo = .050    # Geothermal flux       [W/m2]
-        self.H = 2850.      # Ice thickness         [m]
-        self.adot = .1/const.spy      # Accumulation rate     [m/s]
-        self.gamma = 1.532
+        self.Ts = -50.                  # Surface Temperature   [C]
+        self.qgeo = .050                # Geothermal flux       [W/m2]
+        self.H = 2850.                  # Ice thickness         [m]
+        self.adot = .1/const.spy        # Accumulation rate     [m/s]
+        self.gamma = 1.532              # Exponent for vertical velocity
         self.p = 0.      # Lliboutry shape factor for vertical velocity (large p is ~linear)
 
         ### Gradients ###
-        self.dTs = 0.                   # Change in air temperature over distance x/y [C/m]
-        self.dH = np.sin(.2*np.pi/180.)    # Thickness gradient in x/y directions, used for deformational flow calculation        [m/m]
-        self.da = 0.                    # Accumulation gradient in x/y directions     [m/yr/m]
+        self.dTs = 0.                       # Change in air temperature over distance x/y [C/m]
+        self.dH = np.sin(.2*np.pi/180.)     # Thickness gradient in x/y directions, used for deformational flow calculation        [m/m]
+        self.da = 0.                        # Accumulation gradient in x/y directions     [m/yr/m]
 
         ### Velocity Terms ###
-        self.Udef, self.Uslide = 0., 0.
+        self.Udef = 0.          # Deformational velocity [m/s]
+        self.Uslide = 0.        # Sliding velocity [m/s]
 
-        ### Thickness Change (default to None) ###
-        self.Hs = None
+        ### Thickness over time (default to None) ###
+        self.Hs = None      # Array of ice thicknesses
 
         ### Melting Conditions ###
-        self.Mrate = 0.
-        self.Mcum = 0.
+        self.Mrate = 0.     # Melt rate [m/s]
+        self.Mcum = 0.      # Cumulative melt [m]
 
         ### Empty Time Array as Default ###
         self.ts=[]
@@ -73,17 +76,12 @@ class numerical_model():
     def initial_conditions(self,const=const,analytical='Robin'):
         """
         Define the initial ice column properties using an analytical solution
-        with paramaters from at the beginning of the time series.
+        with paramaters from the beginning of the time series.
         """
 
-        if len(self.ts)>0 and 'Udefs' not in vars(self):
-            if 'verbose' in self.flags:
-                print('No velocity arrays set, setting to constant value.')
-            self.Udefs, self.Uslides = self.Udef*np.ones_like(self.ts), self.Uslide*np.ones_like(self.ts)
-
-        # Weertman (1968) has this extra term to add to the vertical velocity
+        # get the initial surface temperature and downward velocity for input to analytical solution
         if hasattr(self.adot,"__len__"):
-            v_z_surf = self.adot[0] + self.Udef*self.dH
+            v_z_surf = self.adot[0] + self.Udef*self.dH         # Weertman (1968) has this extra term to add to the vertical velocity
             T_surf = self.Ts[0]
         else:
             v_z_surf = self.adot + self.Udef*self.dH
@@ -96,6 +94,7 @@ class numerical_model():
         elif analytical == 'Rezvan':
             self.z,self.T = analytical_model(T_surf,self.qgeo,self.H,
                     v_z_surf,const=const,nz=self.nz,gamma=self.gamma,gamma_plus=False)
+
         # vertical velocity
         if self.p == 0.:
             # by exponent, gamma
@@ -186,18 +185,20 @@ class numerical_model():
         self.B[-1,:] = 0.
 
         # Source Term
+        if 'Sdot' not in vars(self):
+            raise ValueError('Must run the source_terms function before defining the stencil.')
         self.Tgrad = -(self.qgeo+self.q_b)/const.k             # Temperature gradient at bed
         self.Sdot[0] = -2*self.dz*self.Tgrad*self.diff/self.dt
         self.Sdot[-1] = 0.
 
-        # Integration stencil to calculate melt near the bottom of the profile
+        # Integration stencil to calculate melt volume near the bottom of the profile
         self.int_stencil = np.ones_like(self.z)
         self.int_stencil[[0,-1]] = 0.5
 
     # ---------------------------------------------
 
     def thickness_update(self,H_new,T_upper=None):
-        # If no upper fill value is provided, use the current surface temperature
+        # If no upper fill value is provided for the interpolation, use the current surface temperature
         if T_upper is None:
             T_upper = self.T[-1]
         # Build an interpolator from the prior state
@@ -240,6 +241,7 @@ class numerical_model():
         Run the finite-difference model as it has been set up through the other functions.
         """
 
+        # Set up the output arrays
         if 'save_all' in self.flags:
             self.Ts_out = np.empty((0,len(self.T)))
             self.Mrate_all = np.empty((0))
@@ -248,7 +250,8 @@ class numerical_model():
                 self.zs_out = np.empty((0,len(self.z)))
 
         # Run the initial conditions until stable
-        T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
+        steady_dt = 1.
+        T_new = self.A*self.T - self.B*self.T + steady_dt*self.Sdot
         steady_iter = 0
         if 'verbose' in self.flags:
             print('Initializing',end='')
@@ -256,7 +259,7 @@ class numerical_model():
             if 'verbose' in self.flags and steady_iter%1000==0:
                 print('.',end='')
             self.T = T_new.copy()
-            T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
+            T_new = self.A*self.T - self.B*self.T + steady_dt*self.Sdot
             T_new[T_new>self.pmp] = self.pmp[T_new>self.pmp]
             steady_iter += 1
         self.T = T_new.copy()
@@ -275,9 +278,15 @@ class numerical_model():
                 self.Ts_out = np.append(self.Ts_out,[T_steady],axis=0)
             return
 
-        # ---
+        ### Non-Steady Model ###
 
-        # If a non-steady model is desired iterate through all times
+        # Expand the velocity terms into an array if that has not been added manually yet
+        if len(self.ts)>0 and 'Udefs' not in vars(self):
+            if 'verbose' in self.flags:
+                print('No velocity arrays set, setting to constant value.')
+            self.Udefs, self.Uslides = self.Udef*np.ones_like(self.ts), self.Uslide*np.ones_like(self.ts)
+
+        # Iterate through all times
         for i in range(len(self.ts)):
 
             ### Print and output
@@ -293,11 +302,10 @@ class numerical_model():
 
             ### Update to current time
             self.Udef,self.Uslide = self.Udefs[i],self.Uslides[i]   # update the velocity terms from input
-            self.T[-1] = self.Ts[i]  # set surface temperature condition from input
-            v_z_surf = self.adot[i] + self.Udef*self.dH # set vertical velocity from input terms (accumulation and surface velocity)
+            self.T[-1] = self.Ts[i]                                 # set surface temperature condition from input
             if self.Hs is not None:
                 self.thickness_update(self.Hs[i]) # thickness update
-            # update the thickness
+            v_z_surf = self.adot[i] + self.Udef*self.dH             # set vertical velocity from input terms (accumulation and surface velocity)
             if self.p == 0.: # by exponent, gamma
                 self.v_z = self.Mrate/const.spy + v_z_surf*(self.z/self.H)**self.gamma
             else: # by shape factor, p

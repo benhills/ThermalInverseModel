@@ -18,8 +18,10 @@ const = constants()
 
 # Numbers as input to forward model
 z_data,T_data,C_data = np.transpose(np.load('./data/icetemp_data.npy'))
-Spice_Accumulation = np.load('./data/SP_accumulation_interpolated.npy')
-Spice_airTemp = np.load('./data/SP_airTemperature_interpolated.npy')
+#Spice_Accumulation = np.load('./data/SP_accumulation_interpolated.npy')
+#Spice_airTemp = np.load('./data/SP_airTemperature_interpolated.npy')
+Spice_Accumulation = np.load('./data/extended_accumulation_1y.npy')[:,4::5]
+Spice_airTemp = np.load('./data/extended_airTemperature_1y.npy')[:,4::5]
 ts = Spice_Accumulation[0]
 adot = Spice_Accumulation[1]
 Tsurf = Spice_airTemp[1]
@@ -30,13 +32,15 @@ p = 10.
 udef = 5.
 uslide0 = 0.
 uslide1 = 0.
-t0 = 40.
+t0 = 120.
 m_init = np.array([q_geo,p,udef,uslide0,uslide1,t0])
 # Model step
 m_step = np.array([0.01,1.,.5,.5,.5,1.])
 # Model min/max
 m_min = np.zeros_like(m_init)
-m_max = np.array([.1,100.,20.,20.,20.,np.nanmax(ts)])
+m_min[0] = .04
+m_min[-1] = 100.
+m_max = np.array([.08,100.,20.,20.,20.,np.nanmax(ts)])
 
 
 def f(m,H,cum_flag,ts,adot,Tsurf,z_data,tol):
@@ -79,4 +83,4 @@ def f_parallel(m,Hs=np.array([2810,2850]),cum_flags=np.array([False,True]),
     return T_out
 
 from inverse_model import simulated_annealing
-simulated_annealing(f_parallel,None,m_init,m_step,m_min,m_max,None,kmax=10000,a=1e7)
+simulated_annealing(f_parallel,None,m_init,m_step,m_min,m_max,None,kmax=5000,a=2.)
