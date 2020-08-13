@@ -59,6 +59,8 @@ def f(m,H,cum_flag,ts,adot,Tsurf,z_data,tol):
     fp.initial_conditions()
     fp.source_terms()
     fp.stencil()
+    fp.run_to_steady_state()
+
     fp.flags = []
     if cum_flag:
         fp.flags.append('water_cum')

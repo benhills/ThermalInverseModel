@@ -39,7 +39,7 @@ class numerical_model():
 
         ### Numerical Inputs ###
         self.nz=101         # Number of layers in the ice column
-        self.tol=1e-4       # Convergence criteria
+        self.tol=1e-5       # Convergence criteria
 
         ### Boundary Constraints ###
         self.Ts = -50.                  # Surface Temperature   [C]
@@ -138,7 +138,7 @@ class numerical_model():
 
     # ---------------------------------------------
 
-    def stencil(self,const=const):
+    def stencil(self,dt=None,const=const):
         """
         Finite Difference Scheme for 1-d advection diffusion
         Surface boundary is fixed (air temperature)
@@ -146,16 +146,18 @@ class numerical_model():
         """
 
         # Choose time step
-        if 'steady' in self.flags:
-            # set time step with CFL
-            self.dt = 0.5*self.dz/np.max(self.v_z)
-        else:
+        if dt is None:
             # Check if the time series is monotonically increasing
             if len(self.ts) == 0:
                 raise ValueError("If not steady, must input a time array.")
             if not np.all(np.gradient(np.gradient(self.ts))<self.tol):
                 raise ValueError("Time series must monotonically increase.")
             self.dt = np.mean(np.gradient(self.ts))
+        elif dt == 'CFL':
+            # set time step with CFL
+            self.dt = 0.5*self.dz/np.max(self.v_z)
+        else:
+            self.dt = dt
         # Stability, check the CFL
         if np.max(self.v_z)*self.dt/self.dz > 1.:
             print('CFL = ',max(self.v_z)*self.dt/self.dz,'; cannot be > 1.')
@@ -236,8 +238,35 @@ class numerical_model():
 
     # ---------------------------------------------
 
+    def run_to_steady_state(self,const=const):
+        """
+        """
+
+        # Run the initial conditions until stable
+        T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
+        steady_iter = 0
+        if 'verbose' in self.flags:
+            print('Running model to steady state')
+        while any(abs(self.T[1:]-T_new[1:])>self.tol):
+            if 'verbose' in self.flags and steady_iter%1000==0:
+                print('.',end='')
+            self.T = T_new.copy()
+            T_new = self.A*self.T - self.B*self.T + self.dt*self.Sdot
+            T_new[T_new>self.pmp] = self.pmp[T_new>self.pmp]
+            steady_iter += 1
+        self.T = T_new.copy()
+        if 'verbose' in self.flags:
+            print('')
+
+        # Run one more time to see how much things are changing still
+        self.T_steady = self.A*self.T - self.B*self.T + self.dt*self.Sdot
+        self.T_steady[self.T_steady>self.pmp] = self.pmp[self.T_steady>self.pmp]
+
+    # ---------------------------------------------
+
     def run(self,const=const):
         """
+        Non-Steady Model
         Run the finite-difference model as it has been set up through the other functions.
         """
 
@@ -248,37 +277,6 @@ class numerical_model():
             self.Mcum_all = np.array([0])
             if self.Hs is not None:
                 self.zs_out = np.empty((0,len(self.z)))
-
-        # Run the initial conditions until stable
-        steady_dt = 1.
-        T_new = self.A*self.T - self.B*self.T + steady_dt*self.Sdot
-        steady_iter = 0
-        if 'verbose' in self.flags:
-            print('Initializing',end='')
-        while any(abs(self.T[1:]-T_new[1:])>self.tol):
-            if 'verbose' in self.flags and steady_iter%1000==0:
-                print('.',end='')
-            self.T = T_new.copy()
-            T_new = self.A*self.T - self.B*self.T + steady_dt*self.Sdot
-            T_new[T_new>self.pmp] = self.pmp[T_new>self.pmp]
-            steady_iter += 1
-        self.T = T_new.copy()
-        if 'verbose' in self.flags:
-            print('')
-
-        # If a steady state model is desired
-        if 'steady' in self.flags:
-            if 'verbose' in self.flags:
-                print('Exiting model at steady state condition.')
-            # Run one more time to see how much things are changing still
-            T_steady = self.A*self.T - self.B*self.T + self.dt*self.Sdot
-            T_steady[T_steady>self.pmp] = self.pmp[T_steady>self.pmp]
-            if 'save_all' in self.flags:
-                self.Ts_out = np.append(self.Ts_out,[self.T],axis=0)
-                self.Ts_out = np.append(self.Ts_out,[T_steady],axis=0)
-            return
-
-        ### Non-Steady Model ###
 
         # Expand the velocity terms into an array if that has not been added manually yet
         if len(self.ts)>0 and 'Udefs' not in vars(self):
