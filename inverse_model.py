@@ -134,7 +134,7 @@ def P(cost,cost_new,T):
         return np.exp(-(cost_new-cost)/T)
 
 
-def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan,T_data=T_data,save_names=['Models','Pred_Data','Cost'],restart=False):
+def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan,T_data=T_data,save_names=['Models','Pred_Data','Cost','Counter'],restart=False):
     """
     """
 
@@ -144,6 +144,9 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
         Ts_out = np.load(save_names[1]+'.npy')
         cost_out = np.load(save_names[2]+'.npy')
         cost = cost_out[-1]
+
+        # Energy evaluation counter
+        k = np.load(save_names[3]+'.npy')+1
 
     else:
         # Compute cost of the new model
@@ -161,7 +164,9 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
         np.save(save_names[1],Ts_out)
         np.save(save_names[2],cost_out)
 
-    k = 1 # Energy evaluation counter
+        # Energy evaluation counter
+        k = 1
+
     while k < kmax:
 
         print('Iteration Number:',k)
@@ -197,6 +202,7 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
             print('Model declined with temperature:',temp(k,kmax,a),', and likelihood of acceptance:',P(cost,cost_pert,temp(k,kmax,a)))
             print('Using the previous model state.')
 
+        np.save(save_names[3],k)
         k += 1   # Iterate counter
 
         print('\n')
