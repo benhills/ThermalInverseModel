@@ -293,7 +293,7 @@ class numerical_model():
                     print('t =',int(self.ts[i]/const.spy),'; dt =',self.dt/const.spy,'; melt rate =',np.round(self.Mrate*1000.,2),'; melt cum = ',np.round(self.Mcum,2),'; q_b = ',self.q_b)
                 if 'save_all' in self.flags:
                     self.Mrate_all = np.append(self.Mrate_all,self.Mrate)
-                    self.Mcum_all = np.append(self.Mcum_all,self.Mrate)
+                    self.Mcum_all = np.append(self.Mcum_all,self.Mcum)
                     self.Ts_out = np.append(self.Ts_out,[self.T],axis=0)
                     if self.Hs is not None:
                         self.zs_out = np.append(self.zs_out,[self.z],axis=0)
