@@ -16,8 +16,10 @@ z_data,T_data,C_data = np.transpose(np.load('./data/icetemp_data.npy'))
 
 # --------------------------------------------------------------------------------------------------------
 
-def norm2(f,m,T_data=T_data):
-    norm = np.sum((f(m)-T_data)**2.)
+def norm2(f,m,T_data=T_data,weights=None):
+    if weights==None:
+        weights = np.ones_like(T_data)
+    norm = np.sum(weights*(f(m)-T_data)**2.)
     return norm
 
 def cost(modeled_Temp, T_param, t_param, measured_Temp=T_data, regularization=0.0):
@@ -134,7 +136,8 @@ def P(cost,cost_new,T):
         return np.exp(-(cost_new-cost)/T)
 
 
-def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan,T_data=T_data,save_names=['Models','Pred_Data','Cost'],restart=False):
+def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan,T_data=T_data,
+                        weights=None,save_names=['Models','Pred_Data','Cost','Counter'],restart=False):
     """
     """
 
@@ -145,11 +148,16 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
         cost_out = np.load(save_names[2]+'.npy')
         cost = cost_out[-1]
 
+        # Energy evaluation counter
+        k = np.load(save_names[3]+'.npy')+1
+
     else:
         # Compute cost of the new model
         print('Run the forward problem on initial model input.')
         predicted_data = f(m)
-        cost = np.sum((predicted_data-T_data)**2.)
+        if weights is None:
+            weights = np.ones_like(T_data)
+        cost = np.sum(weights*(predicted_data-T_data)**2.)
         if reg is not None:
             cost += reg(m,t_m)
 
@@ -161,7 +169,9 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
         np.save(save_names[1],Ts_out)
         np.save(save_names[2],cost_out)
 
-    k = 1 # Energy evaluation counter
+        # Energy evaluation counter
+        k = 1
+
     while k < kmax:
 
         print('Iteration Number:',k)
@@ -175,7 +185,7 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
 
         # Compute cost of the new model
         predicted_data = f(m_pert)
-        cost_pert = np.sum((predicted_data-T_data)**2.)
+        cost_pert = np.sum(weights*(predicted_data-T_data)**2.)
         if reg is not None:
             cost_pert += reg(m_pert,t_m)
         print('Finished with cost:',cost_pert)
@@ -197,6 +207,7 @@ def simulated_annealing(f,reg,m,m_step,m_min,m_max,t_m,kmax=1000,a=2,cost=np.nan
             print('Model declined with temperature:',temp(k,kmax,a),', and likelihood of acceptance:',P(cost,cost_pert,temp(k,kmax,a)))
             print('Using the previous model state.')
 
+        np.save(save_names[3],k)
         k += 1   # Iterate counter
 
         print('\n')
