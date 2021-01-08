@@ -64,6 +64,7 @@ class numerical_model():
         ### Melting Conditions ###
         self.Mrate = 0.     # Melt rate [m/s]
         self.Mcum = 0.      # Cumulative melt [m]
+        self.Mcum_max = None  # Max Cumulative melt for a capped lake [m]
 
         ### Empty Time Array as Default ###
         self.ts=[]
@@ -345,3 +346,7 @@ class numerical_model():
                     self.Mcum = 0. # cumulative melt to zero because everything is frozen
             else:
                 self.Mrate = 0.
+            # Cap the lake level
+            if self.Mcum_max is not None:
+                if self.Mcum > self.Mcum_max:
+                    self.Mcum = self.Mcum_max
