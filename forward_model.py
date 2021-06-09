@@ -82,11 +82,15 @@ class numerical_model():
 
         # get the initial surface temperature and downward velocity for input to analytical solution
         if hasattr(self.adot,"__len__"):
-            v_z_surf = self.adot[0] + self.Udef*self.dH         # Weertman (1968) has this extra term to add to the vertical velocity
+            v_z_surf = self.adot[0]
             T_surf = self.Ts[0]
         else:
-            v_z_surf = self.adot + self.Udef*self.dH
+            v_z_surf = self.adot
             T_surf = self.Ts
+
+        # Weertman (1968) has this extra term to add to the vertical velocity
+        if 'weertman_vel' in self.flags:
+            v_z_surf += self.Udef*self.dH
 
         # initial temperature from analytical solution
         if analytical == 'Robin':
@@ -116,26 +120,33 @@ class numerical_model():
         Heat sources from strain heating and downstream advection
         """
 
-        ### Strain Heat Production ###
         # Shear Stress by Lamellar Flow (van der Veen section 4.2)
         tau_xz = const.rho*const.g*(self.H-self.z)*abs(self.dH)
-        # Calculate the viscosity
-        A = viscosity(self.T,self.z,const=const,tau_xz=tau_xz,v_surf=self.Udef*const.spy)
-        # Strain rate, Weertman (1968) eq. 7
-        eps_xz = (A*tau_xz**const.n)/const.spy
-        # strain heat term (K s-1)
-        Q = 2.*(eps_xz*tau_xz)/(const.rho*const.Cp)
+
+        ### Strain Heat Production ###
+        if self.Udef == 0.:
+            Q = np.zeros_like(tau_xz)
+        else:
+            # Calculate the viscosity
+            A = viscosity(self.T,self.z,const=const,tau_xz=tau_xz,v_surf=self.Udef*const.spy)
+            # Strain rate, Weertman (1968) eq. 7
+            eps_xz = (A*tau_xz**const.n)/const.spy
+            # strain heat term (K s-1)
+            Q = 2.*(eps_xz*tau_xz)/(const.rho*const.Cp)
+
         # Sliding friction heat production
         self.tau_b = tau_xz[0]
         self.q_b = self.tau_b*self.Uslide
 
         ### Advection Term ###
-        v_x = self.Uslide + np.insert(cumtrapz(eps_xz,self.z),0,0)    # Horizontal velocity
-        # Horizontal Temperature Gradients, Weertman (1968) eq. 6b
-        dTdx = self.dTs + (self.T-np.mean(self.Ts))/2.*(1./self.H*self.dH-(1./np.mean(self.adot))*self.da)
-
-        ### Final Source Term ###
-        self.Sdot = Q - v_x*dTdx
+        if 'weertman_vel' in self.flags:
+            v_x = self.Uslide + np.insert(cumtrapz(eps_xz,self.z),0,0)    # Horizontal velocity
+            # Horizontal Temperature Gradients, Weertman (1968) eq. 6b
+            dTdx = self.dTs + (self.T-np.mean(self.Ts))/2.*(1./self.H*self.dH-(1./np.mean(self.adot))*self.da)
+            ### Final Source Term ###
+            self.Sdot = Q - v_x*dTdx
+        else:
+            self.Sdot = Q
 
     # ---------------------------------------------
 
@@ -169,9 +180,9 @@ class numerical_model():
         # Stencils
         self.diff = (const.k/(const.rho*const.Cp))*(self.dt/(self.dz**2.))
         self.A = sparse.lil_matrix((self.nz, self.nz))           # Create a sparse Matrix
-        self.A.setdiag((1.-2.*self.diff)*np.ones(self.nz))            # Set the diagonal
-        self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=-1)          # Set the diagonal
-        self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=1)           # Set the diagonal
+        self.A.setdiag((1.-2.*self.diff)*np.ones(self.nz))       # Set the diagonal
+        self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=-1)     # Set the diagonal
+        self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=1)      # Set the diagonal
         self.B = sparse.lil_matrix((self.nz, self.nz))           # Create a sparse Matrix
         for i in range(len(self.z)):
             adv = (-self.v_z[i]*self.dt/self.dz)
@@ -304,7 +315,10 @@ class numerical_model():
             self.T[-1] = self.Ts[i]                                 # set surface temperature condition from input
             if self.Hs is not None:
                 self.thickness_update(self.Hs[i]) # thickness update
-            v_z_surf = self.adot[i] + self.Udef*self.dH             # set vertical velocity from input terms (accumulation and surface velocity)
+            v_z_surf = self.adot[i]      # set vertical velocity
+            # add extra term from Weertman if desired
+            if 'weertman_vel' in self.flags:
+                v_z_surf += self.Udef*self.dH
             if self.p == 0.: # by exponent, gamma
                 self.v_z = self.Mrate/const.spy + v_z_surf*(self.z/self.H)**self.gamma
             else: # by shape factor, p
