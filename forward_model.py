@@ -178,11 +178,11 @@ class numerical_model():
             raise ValueError("Numerically unstable, choose a smaller time step or a larger spatial step.")
 
         # Stencils
-        self.diff = (const.k/(const.rho*const.Cp))*(self.dt/(self.dz**2.))
+        self.diff = (self.k/(const.rho*const.Cp))*(self.dt/(self.dz**2.))
         self.A = sparse.lil_matrix((self.nz, self.nz))           # Create a sparse Matrix
         self.A.setdiag((1.-2.*self.diff)*np.ones(self.nz))       # Set the diagonal
-        self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=-1)     # Set the diagonal
-        self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=1)      # Set the diagonal
+        self.A.setdiag((1.*self.diff[1:])*np.ones(self.nz-1),k=-1)     # Set the diagonal
+        self.A.setdiag((1.*self.diff[:-1])*np.ones(self.nz-1),k=1)      # Set the diagonal
         self.B = sparse.lil_matrix((self.nz, self.nz))           # Create a sparse Matrix
         for i in range(len(self.z)):
             adv = (-self.v_z[i]*self.dt/self.dz)
@@ -191,7 +191,7 @@ class numerical_model():
 
         # Boundary Conditions
         # Neumann at bed
-        self.A[0,1] = 2.*self.diff
+        self.A[0,1] = 2.*self.diff[0]
         self.B[0,:] = 0.
         # Dirichlet at surface
         self.A[-1,:] = 0.
@@ -201,8 +201,8 @@ class numerical_model():
         # Source Term
         if 'Sdot' not in vars(self):
             raise ValueError('Must run the source_terms function before defining the stencil.')
-        self.Tgrad = -(self.qgeo+self.q_b)/const.k             # Temperature gradient at bed
-        self.Sdot[0] = -2*self.dz*self.Tgrad*self.diff/self.dt
+        self.Tgrad = -(self.qgeo+self.q_b)/self.k[0]             # Temperature gradient at bed
+        self.Sdot[0] = -2*self.dz*self.Tgrad*self.diff[0]/self.dt
         self.Sdot[-1] = 0.
 
         # Integration stencil to calculate melt volume near the bottom of the profile
@@ -237,13 +237,13 @@ class numerical_model():
             raise ValueError("Numerically unstable, choose a smaller time step or a larger spatial step.")
 
         # Update diffusion stencil (advection gets updated with velocity profile)
-        self.diff = (const.k/(const.rho*const.Cp))*(self.dt/(self.dz**2.))
+        self.diff = (self.k/(const.rho*const.Cp))*(self.dt/(self.dz**2.))
         self.A.setdiag((1.-2.*self.diff)*np.ones(self.nz))            # Set the diagonal
         self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=-1)          # Set the diagonal
         self.A.setdiag((1.*self.diff)*np.ones(self.nz),k=1)           # Set the diagonal
         # Boundary Conditions
         # Neumann at bed
-        self.A[0,1] = 2.*self.diff
+        self.A[0,1] = 2.*self.diff[0]
         # Dirichlet at surface
         self.A[-1,:] = 0.
         self.A[-1,-1] = 1.
@@ -334,7 +334,7 @@ class numerical_model():
             if i%1000 == 0: # Only update the deformational heat source periodically because it is computationally expensive
                 self.source_terms()
             self.q_b = self.tau_b*self.Uslide # Update sliding heat flux
-            self.Tgrad = -(self.qgeo+self.q_b)/const.k  # Temperature gradient at bed updated from sliding heat flux
+            self.Tgrad = -(self.qgeo+self.q_b)/self.k  # Temperature gradient at bed updated from sliding heat flux
             self.Sdot[0],self.Sdot[-1] = -2*self.dz*self.Tgrad*self.diff/self.dt, 0. # update boundaries on heat source vector
 
             ### Solve
